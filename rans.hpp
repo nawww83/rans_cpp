@@ -14,12 +14,17 @@ using u64 = cnt::u64;
 
 constexpr u32 L = 65536;
 
+static void assert_size(int in_size) {
+    assert( (u64)in_size < (1ull << (8*sizeof(u32) - 1)) ); // N < 2^31;
+}
+
 class Rans{
     public:
         explicit Rans() = default;
         void encode(const u8* input, int in_size, u8* output, int& out_size);
         void decode(const u8* input, int in_size, u8* output, int out_size);
         int required_bytes(int in_size) const {
+            assert_size(in_size);
             return in_size*2 + sizeof(u32)*2 + sizeof(u8)*1 + cnt::M*(sizeof(u16) + sizeof(u8));
         }
     private:
@@ -28,7 +33,7 @@ class Rans{
 };
 
 void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
-    assert( (u64)in_size < (1ull << 8*sizeof(u32)));
+    assert_size(in_size);
     assert( (1ull << (8*sizeof(u16)) == (u64)L));
     auto fr { c.count(input, in_size) };
     //
