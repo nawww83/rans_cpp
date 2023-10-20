@@ -20,7 +20,7 @@ class Rans{
         void encode(const u8* input, int in_size, u8* output, int& out_size);
         void decode(const u8* input, int in_size, u8* output, int out_size);
         int required_bytes(int in_size) const {
-            return in_size*2 + cnt::M*(sizeof(u16) + sizeof(u8));
+            return in_size*2 + sizeof(u32)*2 + sizeof(u8)*1 + cnt::M*(sizeof(u16) + sizeof(u8));
         }
     private:
         cnt::Counter<L> c;
