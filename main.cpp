@@ -25,9 +25,9 @@ public:
 
 
 template<class Generator>
-auto fill_array_randomly(Generator& g, u8 *v, int n) {
+auto fill_array_randomly(Generator& g, u8 *v, int n, bool inversion=false) {
     for (int i=0; i<n; ++i) {
-        v[i] = g() & 255;
+        v[i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
     }
 }
 
@@ -59,13 +59,14 @@ int main() {
         std::vector<u8> v_decoded(N);
         constexpr int Q = 32;
         std::vector<double> perfomances(Q);
+        bool inv_f = std::rand() % 2;
 
         cout << " Test is started. please, wait..." << endl;
         for (int q=0; q<=Q; ++q) {
             const double par = double(q) / double(Q);
             GeometricDistribution<int> r(par);
 
-            fill_array_randomly(r, v.data(), N);
+            fill_array_randomly(r, v.data(), N, inv_f);
             int out_size;
             timer.reset();
             rans.encode(v.data(), N, output.data(), out_size);
