@@ -20,9 +20,11 @@ static bool all_bytes_equal(T x) {
 }
 
 
+template <u32 L>
 class Counter {
 public:
     explicit Counter() = default;
+    auto get_L() const { return L; }
     auto count(const u8* input, int n) {
         std::array<u32, M> f {};
         const std::pair<int, int> q { n / 4, n % 4};
@@ -39,6 +41,34 @@ public:
         for (int i=0; i<q.second; ++i) {
             f[input[q.first*4 + i]] += 1;
         }
+        // renormalize
+        std::array<u64, M+1> cs {0};
+        for (int i=0; i<M; ++i) {
+            cs[i+1] = cs.at(i) + f.at(i);
+        }
+        const u64 N = cs[M];
+        int exceed = 0;
+        for (int i=0; i<M; ++i) {
+            const bool is_non_zero = (f.at(i) > 0);
+            cs[i+1] *= L;
+            cs[i+1] /= N;
+            f[i] = cs.at(i+1) - cs.at(i);
+            const bool is_zero = (f.at(i) == 0);
+            if (is_non_zero && is_zero) { // dynamic range failure
+                f[i] = 1;
+                exceed++;
+            }
+        }
+        // correct the dynamic range failures
+        for (int i=0; i<M; ++i) {
+            if (exceed > 0) {
+                if (f[i] > 1) {
+                    f[i] -= 1;
+                    exceed -= 1;
+                }
+            }
+        }
+        //
         return f;
     }
 };

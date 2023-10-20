@@ -2,6 +2,7 @@
 #include <random>
 
 #include "counter.hpp"
+#include "rans.hpp"
 #include "timer.hpp"
 
 #include <vector>
@@ -38,45 +39,57 @@ int main() {
 
     double dt = 0;
     auto disp_perf = [&dt](int n) {
-        cout << "dt: " << dt << " ns. Perf: " << (1.e3 * n / dt) << " MB/s" << endl;
+        cout << " performance: " << (1.e3 * n / dt) << " MB/s" << endl;
     };
 
-    constexpr int N = 1024*1024*32;
-    std::vector<u8> v(N);
+    rans::Rans rans;
+    // cnt::Counter<65536> c;
+    constexpr int N_max = 8*1024*1024;
 
-    constexpr int Q = 16;
-    std::vector<double> perfomances(Q);
+    while (true) {
 
-    cnt::Counter c;
+        size_t N = (((size_t)std::rand()) % N_max) + 1;
+        std::vector<u8> v(N);
 
-    cout << "Test is started. please, wait..." << endl;
-    for (int q=0; q<=Q; ++q) {
-        const double par = double(q) / double(Q);
-        GeometricDistribution<int> r(par);
+        std::vector<u8> output(rans.required_bytes(N));
 
-        // timer.reset();
-        fill_array_randomly(r, v.data(), N);
-        // dt = timer.elapsed_ns();
-        // disp_perf(N);
-        //
-        timer.reset();
-        auto f { c.count(v.data(), N) };
-        dt = timer.elapsed_ns();
-        cnt::u64 sum_f = 0;
-        for (auto el : f) {
-            sum_f += el;
+        std::cout << std::endl;
+        std::cout << "New iteration: required size: " << output.size() << ", N: " << N << std::endl;
+
+        std::vector<u8> v_decoded(N);
+        constexpr int Q = 32;
+        std::vector<double> perfomances(Q);
+
+        cout << " Test is started. please, wait..." << endl;
+        for (int q=0; q<=Q; ++q) {
+            const double par = double(q) / double(Q);
+            GeometricDistribution<int> r(par);
+
+            fill_array_randomly(r, v.data(), N);
+            int out_size;
+            timer.reset();
+            rans.encode(v.data(), N, output.data(), out_size);
+            // auto f { c.count(v.data(), N) };
+            dt = timer.elapsed_ns();
+            // cnt::u64 sum_f = 0;
+            // for (auto el : f) {
+                // sum_f += el;
+            // }
+            // assert(sum_f == c.get_L());
+            // cout << " geometric distr. p: " << par << ", sum of frequencies: " << sum_f << ", ";
+            cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << double(N) / (out_size + sizeof(cnt::u32) + cnt::M*sizeof(cnt::u16)) << ", ";
+            disp_perf(N);
+            //
+            timer.reset();
+            rans.decode(output.data(), out_size, v_decoded.data(), N);
+            dt = timer.elapsed_ns();
+            assert( std::equal(v.begin(), v.end(), v_decoded.begin()) );
+            cout << "  decompressed size: " << v_decoded.size() << ", bytes" << ", ";
+            disp_perf(N);
         }
-        assert(sum_f == N);
-        cout << "par: " << par << ", sum f: " << sum_f << ", ";
-        disp_perf(N);
+
+        cout << "Test is Ok!" << endl;
     }
-
-    // for (int i=0; i<cnt::M; ++i) {
-    //     cout << c.get_f(i) << ", ";
-    // } 
-    // cout << endl;
-
-    cout << "Test is Ok!" << endl;
 
     return 0;
 }
