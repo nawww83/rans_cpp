@@ -78,8 +78,10 @@ int main() {
             // }
             // assert(sum_f == c.get_L());
             // cout << " geometric distr. p: " << par << ", sum of frequencies: " << sum_f << ", ";
-            cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << double(N) / (out_size + sizeof(cnt::u32) + cnt::M*sizeof(cnt::u16)) << ", ";
+            const double CR = double(N) / double(out_size);
+            cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << CR << ", ";
             disp_perf(N);
+            assert(CR >= 1);
             //
             timer.reset();
             rans.decode(output.data(), out_size, v_decoded.data(), N);
