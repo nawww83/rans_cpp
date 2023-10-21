@@ -72,7 +72,7 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
         *(u16*)out_ptr = (u16)(fr[i] - 1);
         out_ptr += sizeof(u16);
         // std::cout << " write sym: " << idx_to_symbol[i] << ", f: " << fr[i] << "; ";
-        // std::cout << (u16)fr.at(i) << ", ";
+        // std::cout << (u16)fr[i] << ", ";
     }
     // std::cout << " M: " << M << std::endl;
     const u8* x_ptr = out_ptr;
@@ -88,11 +88,7 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
         auto update_x = [&x, f](u32 cum_fr) { // classic rANS transformation: but we eliminate (x mod f) term
             x += ( (x / f) * (L - f) + cum_fr );
         };
-        if ((x >> (8*sizeof(u16))) < f) { // most likely if there is a good compression
-            update_x(cs[idx]);
-            continue;
-        }
-        {   // flush output
+        if ((u64)x >= (u64)(f)*L) {   // flush output
             *(u16*)out_ptr = x & (L - 1);
             // std::cout << " flush: " << (x & (base - 1)) << std::endl;
             out_ptr += sizeof(u16);

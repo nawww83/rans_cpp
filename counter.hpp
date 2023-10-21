@@ -44,16 +44,16 @@ public:
         // renormalize
         std::array<u64, M+1> cs {0};
         for (int i=0; i<M; ++i) {
-            cs[i+1] = cs.at(i) + f.at(i);
+            cs[i+1] = cs[i] + f[i];
         }
         const u64 N = cs[M];
         int exceed = 0;
         for (int i=0; i<M; ++i) {
-            const bool is_non_zero = (f.at(i) > 0);
-            cs[i+1] *= L;
-            cs[i+1] /= N;
-            f[i] = cs.at(i+1) - cs.at(i);
-            const bool is_zero = (f.at(i) == 0);
+            const bool is_non_zero = (f[i] > 0);
+            cs[i + 1] *= L;
+            cs[i + 1] /= N;
+            f[i] = cs[i + 1] - cs[i];
+            const bool is_zero = (f[i] == 0);
             if (is_non_zero && is_zero) { // dynamic range failure
                 f[i] = 1;
                 exceed++;
