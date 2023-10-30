@@ -57,11 +57,11 @@ int main() {
         std::cout << "New iteration: required size: " << output.size() << ", N: " << N << std::endl;
 
         std::vector<u8> v_decoded(N);
-        constexpr int Q = 32;
+        constexpr int Q = 128;
         std::vector<double> perfomances(Q);
         bool inv_f = std::rand() % 2;
 
-        cout << " Test is started. please, wait..." << endl;
+        cout << " Test is started, inversion flag: " << inv_f << ", please, wait..." << endl;
         for (int q=0; q<=Q; ++q) {
             const double par = double(q) / double(Q);
             GeometricDistribution<int> r(par);
@@ -81,7 +81,7 @@ int main() {
             const double CR = double(N) / double(out_size);
             cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << CR << ", ";
             disp_perf(N);
-            assert(CR >= 1);
+            assert(CR >= 1.00000);
             //
             timer.reset();
             rans.decode(output.data(), out_size, v_decoded.data(), N);
