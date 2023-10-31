@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <array>
 #include <cassert>
+#include <algorithm>
 
 
 namespace cnt {
@@ -13,7 +14,7 @@ using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-constexpr int M = 256;
+constexpr int M = 256; // byte-wise counter
 
 template <typename T>
 static bool all_bytes_equal(T x) {
@@ -33,7 +34,7 @@ static int int_log(T x) {
 }
 
 
-template <u32 Lmax>
+template <u32 Lmax, u32 Lmin=256>
 class Counter {
 public:
     explicit Counter() = default;
@@ -73,7 +74,8 @@ public:
         const int logL = int_log(L);
         L = (1u << logL);
         // std::cout << " CC L: " << L << std::endl;
-        L = (L > Lmax) ? Lmax : L;
+        L = std::min(L , Lmax);
+        L = std::max(L, Lmin);
         // std::cout << " CCC L: " << L << std::endl;
         int exceed = 0;
         for (int i=0; i<M; ++i) {
