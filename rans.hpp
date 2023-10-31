@@ -2,7 +2,7 @@
 
 #include "counter.hpp"
 #include <algorithm>
-
+#include <vector>
 
 namespace rans {
 
@@ -21,7 +21,9 @@ static void assert_size(int in_size) {
 
 class Rans{
     public:
-        explicit Rans() = default;
+        explicit Rans() {
+            lut.resize(Lmax);
+        }
         void encode(const u8* input, int in_size, u8* output, int& out_size);
         void decode(const u8* input, int in_size, u8* output, int out_size);
         int required_bytes(int in_size) const {
@@ -31,6 +33,7 @@ class Rans{
     private:
         cnt::Counter<Lmax> c;
         std::array<u32, cnt::M+1> cs;
+        std::vector<u8> lut;
 };
 
 void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
@@ -124,6 +127,10 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
     assert( M <= cnt::M );
     std::array<u32, cnt::M> symbols;
     {
+        bool use_lut = (M >= 8);
+        lut.resize(use_lut ? L : 0);
+    }
+    {
         int i = -1;
         while (++i < M) {   
             symbols[i] = *(u8*)in_ptr;
@@ -132,6 +139,11 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
             in_ptr += sizeof(u16);
             // std::cout << " read sym: " << int(symbols[i]) << ", f: " << f << "; ";
             cs[i+1] = cs[i] + f;
+            if (! lut.empty()) {
+                for (int j=cs[i];j<cs[i+1];++j) {
+                    lut[j] = i & 255;
+                }
+            }
         }
     }
     // std::cout << std::endl;
@@ -154,13 +166,22 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
         }
     };
     u8* out = output + decompressed_size;
-    while (out != output) {
-        // Linear search: symbol frequencies are sorted when they were encoded
-        u32 idx = 0;    
-        while ( cs[idx+1] <= (x & (L - 1)) ) {
+    auto get_idx = [this](u32 xmod) {
+        int idx = -1;
+        if (! lut.empty()) {
+            idx = lut[xmod];
+            return idx;   
+        }
+        idx = 0;    
+        while ( cs[idx+1] <= xmod ) {
             idx++;
         }
-        // idx = std::upper_bound(cs.begin(), cs.begin() + M, (x & (L - 1))) - cs.begin() - 1;
+        return idx;
+    };
+    while (out != output) {
+        // Linear search: symbol frequencies are sorted when they were encoded
+        const int idx = get_idx(x & (L - 1));    
+        assert( idx != -1);
         *(--out) = symbols[idx];
         x = (x >> logL) * (cs[idx+1] - cs[idx]) + ((x & (L - 1)) - cs[idx]);
         // if (x >= L) {
@@ -168,7 +189,7 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
             continue;;
         }
         read_x();
-    }
+    }   
 }
 
 } // namespace rans

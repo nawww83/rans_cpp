@@ -38,8 +38,12 @@ int main() {
     using namespace std;
 
     double dt = 0;
-    auto disp_perf = [&dt](int n) {
-        cout << " performance: " << (1.e3 * n / dt) << " MB/s" << endl;
+    double current_perf;
+    auto disp_perf = [&dt, &current_perf](int n, bool display=true) {
+        current_perf = (1.e3 * n / dt);
+        if (display) {
+            cout << " performance: " << current_perf << " MB/s" << endl;
+        }
     };
 
     rans::Rans rans;
@@ -54,7 +58,7 @@ int main() {
         std::vector<u8> output(rans.required_bytes(N));
 
         std::cout << std::endl;
-        std::cout << "New iteration: required size: " << output.size() << ", N: " << N << std::endl;
+        std::cout << "New iteration: required output size: " << output.size() << ", N: " << N << std::endl;
 
         std::vector<u8> v_decoded(N);
         constexpr int Q = 128;
@@ -62,6 +66,10 @@ int main() {
         bool inv_f = std::rand() % 2;
 
         cout << " Test is started, inversion flag: " << inv_f << ", please, wait..." << endl;
+        double min_decomp_perf = 1.e18;
+        double max_decomp_perf = 0;
+        double min_comp_perf = 1.e18;
+        double max_comp_perf = 0;
         for (int q=0; q<=Q; ++q) {
             const double par = double(q) / double(Q);
             GeometricDistribution<int> r(par);
@@ -79,17 +87,25 @@ int main() {
             // assert(sum_f == c.get_L());
             // cout << " geometric distr. p: " << par << ", sum of frequencies: " << sum_f << ", ";
             const double CR = double(N) / double(out_size);
-            cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << CR << ", ";
-            disp_perf(N);
+            // cout << " geom. distr. p: " << par << ", compressed size: " << out_size << ", bytes. CR: " << CR << ", ";
+            disp_perf(N, false);
+            min_comp_perf = std::min(min_comp_perf, current_perf);
+            max_comp_perf = std::max(max_comp_perf, current_perf);
             assert(CR >= 1.00000);
             //
             timer.reset();
             rans.decode(output.data(), out_size, v_decoded.data(), N);
             dt = timer.elapsed_ns();
             assert( std::equal(v.begin(), v.end(), v_decoded.begin()) );
-            cout << "  decompressed size: " << v_decoded.size() << ", bytes" << ", ";
-            disp_perf(N);
+            // cout << "  decompressed size: " << v_decoded.size() << ", bytes" << ", ";
+            disp_perf(N, false);
+            min_decomp_perf = std::min(min_decomp_perf, current_perf);
+            max_decomp_perf = std::max(max_decomp_perf, current_perf);
         }
+        cout << "Min decompression performance: " << min_decomp_perf << " MB/s" << endl;
+        cout << "Max decompression performance: " << max_decomp_perf << " MB/s" << endl;
+        cout << "Min compression performance: " << min_comp_perf << " MB/s" << endl;
+        cout << "Max compression performance: " << max_comp_perf << " MB/s" << endl;
 
         cout << "Test is Ok!" << endl;
     }
