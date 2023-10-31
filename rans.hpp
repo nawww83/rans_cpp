@@ -11,10 +11,11 @@ using u16 = cnt::u16;
 using u32 = cnt::u32;
 using u64 = cnt::u64;
 
-constexpr u32 Lmax = 65536;
+constexpr u32 Lmax = 65536; // Doesn't change it!
 
 
 static void assert_size(int in_size) {
+    assert( in_size > 0 );
     assert( (u64)in_size < (1ull << (8*sizeof(u32) - 1)) ); // N < 2^31;
 }
 
@@ -123,16 +124,14 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
     assert( M <= cnt::M );
     std::array<u32, cnt::M> symbols;
     {
-        int i = 0;
-        while (i < M) {   
+        int i = -1;
+        while (++i < M) {   
             symbols[i] = *(u8*)in_ptr;
             in_ptr += sizeof(u8);
-            u32 f = *(u16*)in_ptr;
-            f += 1;
+            const u32 f = (u32)(*(u16*)in_ptr) + 1;
             in_ptr += sizeof(u16);
             // std::cout << " read sym: " << int(symbols[i]) << ", f: " << f << "; ";
             cs[i+1] = cs[i] + f;
-            i++;
         }
     }
     // std::cout << std::endl;
@@ -154,20 +153,19 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
             in_ptr -= sizeof(u16);
         }
     };
-    int i = 1;
-    while (i <= decompressed_size) {
+    u8* out = output + decompressed_size;
+    while (out != output) {
+        // Linear search: symbol frequencies are sorted when they were encoded
         u32 idx = 0;    
         while ( cs[idx+1] <= (x & (L - 1)) ) {
             idx++;
         }
-        // idx = std::upper_bound(cs.begin(), cs.begin() + M, (x & (L - 1))) - cs.begin() - 1; 
-        assert(idx < cnt::M);
-        output[decompressed_size - i] = symbols[idx];
-        i++;
-
+        // idx = std::upper_bound(cs.begin(), cs.begin() + M, (x & (L - 1))) - cs.begin() - 1;
+        *(--out) = symbols[idx];
         x = (x >> logL) * (cs[idx+1] - cs[idx]) + ((x & (L - 1)) - cs[idx]);
-        if (x >= L) {
-            continue;
+        // if (x >= L) {
+        if ((x >> logL) != 0) {
+            continue;;
         }
         read_x();
     }
