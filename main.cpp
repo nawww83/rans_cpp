@@ -44,29 +44,26 @@ int main() {
     auto calc_perf = [&dt](int n) {
         return (1.e3 * n / dt); // MB/s
     };
-
     rans::Rans rans;
     int iters = 0;
     constexpr int N_max = 8*1024*1024;
     const int N_performance_is_mearured = N_max / 4;
+    std::vector<u8> v; v.reserve(N_max);
+    std::vector<u8> output; output.reserve(rans.required_bytes(N_max));
+    std::vector<u8> v_decoded; v_decoded.reserve(N_max);
     while (true) {
         size_t N = (((size_t)std::rand()) % N_max) + 1;
-        std::vector<u8> v(N);
-        std::vector<u8> output(rans.required_bytes(N));
-
         const bool measure_perf = (N >= N_performance_is_mearured);
-
         std::cout << std::endl;
-        std::cout << "New iteration: required output size: " << output.size() << ", N: " << N << std::endl;
-
-        std::vector<u8> v_decoded(N);
+        std::cout << "New iteration: required output size: " << rans.required_bytes(N) << ", N: " << N << std::endl;
         constexpr int Q = 128;
-        bool inv_f = std::rand() % 2;
-
+        const bool inv_f = std::rand() % 2;
         cout << " Test is started, inversion flag: " << inv_f << ", please, wait..." << endl;
         std::vector<double> CRs {};
         std::vector<double> comp_perfs {};
         std::vector<double> decomp_perfs {};
+        v.resize(N); v_decoded.resize(N);
+        output.resize( rans.required_bytes(N) );
         for (int q=0; q<=Q; ++q) {
             const double par = double(q) / double(Q);
             GeometricDistribution<int> r(par);
@@ -77,6 +74,7 @@ int main() {
             dt = timer.elapsed_ns();
             const double CR = double(N) / double(out_size);
             CRs.push_back(CR);
+            assert( out_size <= output.size() );
             if (measure_perf) {
                 // cout << "Compression: ";
                 comp_perfs.push_back(calc_perf(N));
