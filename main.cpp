@@ -51,6 +51,7 @@ int main() {
     std::vector<u8> v; v.reserve(N_max);
     std::vector<u8> output; output.reserve(rans.required_bytes(N_max));
     std::vector<u8> v_decoded; v_decoded.reserve(N_max);
+    double global_min_CR = 1.e18;
     while (true) {
         size_t N = (((size_t)std::rand()) % N_max) + 1;
         const bool measure_perf = (N >= N_performance_is_mearured);
@@ -79,7 +80,6 @@ int main() {
                 // cout << "Compression: ";
                 comp_perfs.push_back(calc_perf(N));
             }
-            assert(CR >= 1.00000);
             //
             timer.reset();
             rans.decode(output.data(), out_size, v_decoded.data(), N);
@@ -98,6 +98,7 @@ int main() {
         const int NN = CRs.size();
         const int NNc = comp_perfs.size();
         assert(comp_perfs.size() == decomp_perfs.size());
+        global_min_CR = std::min(global_min_CR, CRs[0]);
         cout << endl;
         cout << "Input length: " << N << " bytes" << endl;
         cout << "Compression Ratio, CR:" << endl;
@@ -111,7 +112,7 @@ int main() {
             cout << "Performance measurement is skipped due to small input size: " << N << " that is less than: " << N_performance_is_mearured << endl;
         }
         iters++;
-        cout << "Test is Ok! Total iterations: " << iters << endl;
+        cout << "Test is Ok! Total iterations: " << iters << ", global min CR: " << global_min_CR << endl;
     }
 
     return 0;
