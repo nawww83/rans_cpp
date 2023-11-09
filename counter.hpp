@@ -74,7 +74,7 @@ public:
         const int logL = int_log(L);
         L = (1u << logL);
         // std::cout << " CC L: " << L << std::endl;
-        L = std::min(L , Lmax);
+        L = std::min(L, Lmax);
         L = std::max(L, Lmin);
         // std::cout << " CCC L: " << L << std::endl;
         int exceed = 0;
