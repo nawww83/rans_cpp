@@ -12,23 +12,30 @@
 
 using u8 = cnt::u8;
 
+static std::random_device rd;
 
 template <typename T>
 class GeometricDistribution {
 private:
-    std::random_device rd;
     std::mt19937 gen;
     std::geometric_distribution<T> dist;
 public:
     GeometricDistribution(double p): gen(rd()), dist(p) {}
+    GeometricDistribution(GeometricDistribution&& other) noexcept: dist(std::move(other.dist)), gen(std::move(other.gen)) {}
     T operator()() { return dist(gen); }
 };
 
 
 template<class Generator>
 auto fill_array_randomly(Generator& g, u8 *v, int n, bool inversion=false) {
-    for (int i=0; i<n; ++i) {
-        v[i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
+    const int div = n / 2;
+    const int rem = n % 2;
+    for (int i=0; i<div; ++i) {
+        v[2*i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
+        v[2*i+1] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
+    }
+    for (int i=0; i<rem; ++i) {
+        v[div*2 + i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
     }
 }
 
@@ -39,6 +46,14 @@ int main() {
     using namespace std;
 
     std::srand(std::time(0));
+    //
+    constexpr int Q = 128;
+    std::vector<GeometricDistribution<int>> gd{};
+    for (int q=0; q<=Q; ++q) {
+        double par = double(q) / double(Q);
+        gd.emplace_back( GeometricDistribution<int>(par) );
+    }
+    //
 
     double dt = 0;
     auto calc_perf = [&dt](int n) {
@@ -60,7 +75,6 @@ int main() {
         const bool measure_perf = (N >= N_performance_is_mearured);
         std::cout << std::endl;
         std::cout << "New iteration: required output size: " << rans.required_bytes(N) << ", N: " << N << std::endl;
-        constexpr int Q = 128;
         const bool inv_f = std::rand() % 2;
         cout << " Test is started, inversion flag: " << inv_f << ", please, wait..." << endl;
         std::vector<double> CRs {};
@@ -69,9 +83,9 @@ int main() {
         v.resize(N); v_decoded.resize(N);
         output.resize( rans.required_bytes(N) );
         for (int q=0; q<=Q; ++q) {
-            const double par = double(q) / double(Q);
-            GeometricDistribution<int> r(par);
-            fill_array_randomly(r, v.data(), N, inv_f);
+            // const double par = double(q) / double(Q);
+            // GeometricDistribution<int> r(par);
+            fill_array_randomly(gd[q], v.data(), N, inv_f);
             int out_size;
             timer.reset();
             rans.encode(v.data(), N, output.data(), out_size);
@@ -120,9 +134,11 @@ int main() {
         }
         iters++;
         cout << "Test is Ok! Total iterations: " << iters << ", global min CR: " << global_min_CR << endl;
-        cout << "Average median performance: compression: " << global_median_compression_perf << 
-                ", decompression: " << global_median_decompression_perf << 
-                " MB/s, perf. iters: " << perf_iters << endl;
+        if (perf_iters > 0) {
+            cout << "Average median performance: compression: " << global_median_compression_perf << 
+                    ", decompression: " << global_median_decompression_perf << 
+                    " MB/s, perf. iters: " << perf_iters << endl;
+        }
     }
 
     return 0;

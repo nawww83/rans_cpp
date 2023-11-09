@@ -92,11 +92,11 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
     *(u32*)out_ptr = in_size;
     out_ptr += sizeof(u32);
     // std::cout << " write in size: " << in_size << std::endl;
-    // x = [f, Lmax*f] <=> [L*f, L*Lmax]; Lmax = b - the parameter which determines output flushing
+    // x = [f, B*f) <=> [L, L*B); B - the parameter which determines output flushing
     u32 x = (in_size > 1) ? fr[symbol_to_idx[input[0]]] : 1;
     u32 y = (in_size > 1) ? fr[symbol_to_idx[input[1]]] : 1;
     int i = 0;
-    while (i<in_size/2) {
+    while (i < in_size/2) {
         // std::cout << " encode: step i: " << i << std::endl;
         const int idx1 = symbol_to_idx[input[2*i]];
         const int idx2 = symbol_to_idx[input[2*i+1]];
