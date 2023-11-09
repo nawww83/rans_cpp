@@ -1,5 +1,5 @@
 # rans_cpp
-Byte-wise range ANS codec C++ implemetation
+Byte-wise range ANS codec C++ implementation
 
 # Features
 - Two-stream mode: even/odd input symbols are encoded by its own stream
