@@ -46,12 +46,15 @@ int main() {
     };
     rans::Rans rans;
     int iters = 0;
+    double perf_iters = 0;
     constexpr int N_max = 8*1024*1024;
     const int N_performance_is_mearured = N_max / 4;
     std::vector<u8> v; v.reserve(N_max);
     std::vector<u8> output; output.reserve(rans.required_bytes(N_max));
     std::vector<u8> v_decoded; v_decoded.reserve(N_max);
     double global_min_CR = 1.e18;
+    double global_median_compression_perf = 0;
+    double global_median_decompression_perf = 0;
     while (true) {
         size_t N = (((size_t)std::rand()) % N_max) + 1;
         const bool measure_perf = (N >= N_performance_is_mearured);
@@ -108,11 +111,18 @@ int main() {
             cout << " Min: " << decomp_perfs[0] << ", Max: " << decomp_perfs[NNc-1] << ", Median: " << decomp_perfs[NNc / 2] << endl;
             cout << "Compression performance, MB/s:" << endl;
             cout << " Min: " << comp_perfs[0] << ", Max: " << comp_perfs[NNc-1] << ", Median: " << comp_perfs[NNc / 2] << endl;
+
+            global_median_compression_perf += (comp_perfs[NNc / 2] - global_median_compression_perf) / (perf_iters + 1);
+            global_median_decompression_perf += (decomp_perfs[NNc / 2] - global_median_decompression_perf) / (perf_iters + 1);
+            perf_iters += 1;
         } else {
             cout << "Performance measurement is skipped due to small input size: " << N << " that is less than: " << N_performance_is_mearured << endl;
         }
         iters++;
         cout << "Test is Ok! Total iterations: " << iters << ", global min CR: " << global_min_CR << endl;
+        cout << "Average median performance: compression: " << global_median_compression_perf << 
+                ", decompression: " << global_median_decompression_perf << 
+                " MB/s, perf. iters: " << perf_iters << endl;
     }
 
     return 0;
