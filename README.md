@@ -1,14 +1,14 @@
 # rans_cpp
-Range ANS codec C++ implemetation
+Byte-wise range ANS codec C++ implemetation
 
 # Features
-- Two-stream mode: even/odd input bytes are encoded by its own stream
+- Two-stream mode: even/odd input symbols are encoded by its own stream
 - 16-bit flushing, 32-bit arithmetic
-- Frequencies sorting
+- Symbol frequency sorting
 - 16-bit per frequency in the frequency table
 - Auto scale L selection
-- Free-remainder exact rANS transformation: only "div" is used without "mod" function
-- Fast byte counter
+- Free-remainder rANS transformation: only "div" is used without "mod" function
+- Fast symbol counter
 
 # Build
 g++ main.cpp -O3 -std=c++20 -o rans
@@ -17,8 +17,9 @@ g++ main.cpp -O3 -std=c++20 -o rans
 ./rans
 
 # Average performance
-- Compression: 160MB/s
+- Compression: 160 MB/s
 - Decompression: 225 MB/s
+
 On conditions:
 - The input size is more than 2MB
 - CPU Intel i7-8565U CPU 4.2GHz
