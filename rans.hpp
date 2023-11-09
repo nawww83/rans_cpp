@@ -65,7 +65,7 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
     assert(M <= cnt::M);
     const u32 L = cs[M];
     const int logL = cnt::int_log(L);
-    assert( L >= M );
+    assert( (int)L >= M );
     // std::cout << "L encode: " << L << std::endl;
     const u8* out_ptr = output;
     // header: frequency table in 16-bit format
@@ -163,7 +163,7 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
             // std::cout << " read sym: " << int(symbols[i]) << ", f: " << f << "; ";
             cs[i+1] = cs[i] + f;
             if (! lut.empty()) {
-                for (int j=cs[i]; j<cs[i+1]; ++j) {
+                for (u32 j=cs[i]; j<cs[i+1]; ++j) {
                     lut[j] = i & 255;
                 }
             }

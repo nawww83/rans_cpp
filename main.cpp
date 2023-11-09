@@ -74,7 +74,7 @@ int main() {
             dt = timer.elapsed_ns();
             const double CR = double(N) / double(out_size);
             CRs.push_back(CR);
-            assert( out_size <= output.size() );
+            assert( out_size <= (int)output.size() );
             if (measure_perf) {
                 // cout << "Compression: ";
                 comp_perfs.push_back(calc_perf(N));
