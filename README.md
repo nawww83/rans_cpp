@@ -20,7 +20,7 @@ g++ main.cpp -O3 -std=c++20 -o rans
 - Compression: 160 MB/s
 - Decompression: 225 MB/s
 
-On conditions:
+Under the conditions:
 - The input size is more than 2MB
 - CPU Intel i7-8565U CPU 4.2GHz
 - Compiler GCC 11.4
