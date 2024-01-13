@@ -1,14 +1,11 @@
 #include <iostream>
 #include <random>
-
+#include <vector>
+#include <cassert>
 
 #include "counter.hpp"
 #include "rans.hpp"
 #include "timer.hpp"
-
-#include <vector>
-#include <cassert>
-
 
 using u8 = cnt::u8;
 
@@ -49,9 +46,9 @@ int main() {
     std::srand(seed);
     cout << "Welcome!\n";
     cout << "Seed: " << seed << "\n";
-    cout << "Endianess: " << (io::is_little_endian() ? "LE\n" : "Not LE\n");
-    cout << "Endianess: " << (io::is_big_endian() ? "BE\n" : "Not BE\n");
-    assert( io::is_little_endian() ^ io::is_big_endian());
+    cout << "Endianess: " << (io_u::io.is_little_endian() ? "LE\n" : "Not LE\n");
+    cout << "Endianess: " << (io_u::io.is_big_endian() ? "BE\n" : "Not BE\n");
+    assert( io_u::io.is_little_endian() ^ io_u::io.is_big_endian());
     //
     constexpr int Q = 128;
     std::vector<GeometricDistribution<int>> gd{};

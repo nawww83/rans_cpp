@@ -5,7 +5,9 @@
 #include <memory>
 #include <cstring>
 
-namespace io {
+namespace io_u {
+
+struct io_utils {
 
 bool is_little_endian() {
     struct {
@@ -69,5 +71,9 @@ void read_mem_32(uint32_t& x, const uint8_t* buffer, size_t size) {
         x |= ((t << 24) & 0xff000000);
     }
 }
+
+};
+
+static io_utils io;
 
 }
