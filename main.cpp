@@ -27,14 +27,14 @@ public:
 
 
 template<class Generator>
-auto fill_array_randomly(Generator& g, u8 *v, int n, bool inversion=false) {
-    const int div = n / 2;
-    const int rem = n % 2;
-    for (int i=0; i<div; ++i) {
+auto fill_array_randomly(Generator& g, u8 *v, size_t n, bool inversion=false) {
+    const auto div = n / 2;
+    const auto rem = n % 2;
+    for (size_t i=0; i<div; ++i) {
         v[2*i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
         v[2*i+1] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
     }
-    for (int i=0; i<rem; ++i) {
+    for (size_t i=0; i<rem; ++i) {
         v[div*2 + i] = (! inversion) ? (g() & 255) : (255 - (g() & 255));
     }
 }
@@ -45,7 +45,13 @@ static timer_n::Timer timer;
 int main() {
     using namespace std;
 
-    std::srand(std::time(0));
+    const auto seed = std::time(0);
+    std::srand(seed);
+    cout << "Welcome!\n";
+    cout << "Seed: " << seed << "\n";
+    cout << "Endianess: " << (io::is_little_endian() ? "LE\n" : "Not LE\n");
+    cout << "Endianess: " << (io::is_big_endian() ? "BE\n" : "Not BE\n");
+    assert( io::is_little_endian() ^ io::is_big_endian());
     //
     constexpr int Q = 128;
     std::vector<GeometricDistribution<int>> gd{};
@@ -60,10 +66,11 @@ int main() {
         return (1.e3 * n / dt); // MB/s
     };
     rans::Rans rans;
-    int iters = 0;
+    long long iters = 0;
     double perf_iters = 0;
-    constexpr int N_max = 8*1024*1024;
-    const int N_performance_is_mearured = N_max / 4;
+    constexpr size_t N_max = 8*1024*1024; // slow test
+    // constexpr size_t N_max = 4*1024; // fast test
+    const size_t N_performance_is_mearured = N_max / 4;
     std::vector<u8> v; v.reserve(N_max);
     std::vector<u8> output; output.reserve(rans.required_bytes(N_max));
     std::vector<u8> v_decoded; v_decoded.reserve(N_max);
@@ -86,7 +93,7 @@ int main() {
             // const double par = double(q) / double(Q);
             // GeometricDistribution<int> r(par);
             fill_array_randomly(gd[q], v.data(), N, inv_f);
-            int out_size;
+            rans::u32 out_size;
             timer.reset();
             rans.encode(v.data(), N, output.data(), out_size);
             dt = timer.elapsed_ns();
@@ -112,8 +119,8 @@ int main() {
         std::sort(CRs.begin(), CRs.end());
         std::sort(comp_perfs.begin(), comp_perfs.end());
         std::sort(decomp_perfs.begin(), decomp_perfs.end());
-        const int NN = CRs.size();
-        const int NNc = comp_perfs.size();
+        const auto NN = CRs.size();
+        const auto NNc = comp_perfs.size();
         assert(comp_perfs.size() == decomp_perfs.size());
         global_min_CR = std::min(global_min_CR, CRs[0]);
         cout << endl;

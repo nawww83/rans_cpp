@@ -38,11 +38,11 @@ template <u32 Lmax, u32 Lmin=256>
 class Counter {
 public:
     explicit Counter() = default;
-    auto count(const u8* input, int n) {
+    auto count(const u8* input, size_t n) {
         std::array<u32, M> f {};
-        const std::pair<int, int> q { n / 4, n % 4};
+        const std::pair<size_t, size_t> q { n / 4, n % 4};
         std::array<u32, 4> idx;
-        for (int i=0; i<q.first; ++i) {
+        for (size_t i=0; i<q.first; ++i) {
             const auto A = *(u32*)(input + 4*i);
             const bool eq = all_bytes_equal(A);
             idx = {u8(A >> 0), u8(A >> 8), u8(A >> 16), u8(A >> 24)};
@@ -51,7 +51,7 @@ public:
             f[idx[2]] += eq ? 0 : 1;
             f[idx[3]] += eq ? 0 : 1;
         }
-        for (int i=0; i<q.second; ++i) {
+        for (size_t i=0; i<q.second; ++i) {
             f[input[q.first*4 + i]] += 1;
         }
         // renormalize

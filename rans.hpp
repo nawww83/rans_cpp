@@ -1,8 +1,11 @@
 #pragma once
 
 #include "counter.hpp"
+
 #include <algorithm>
 #include <vector>
+
+#include "io_utils.hpp"
 
 namespace rans {
 
@@ -15,7 +18,7 @@ constexpr u32 Lmax = 65536;   // Doesn't change it!
 constexpr u32 Bflush = 65536; // Doesn't change it!
 
 
-static void assert_size(int in_size) {
+static void assert_size(u32 in_size) {
     assert( in_size > 0 );
     assert( (u64)in_size < (1ull << (8*sizeof(u32) - 1)) ); // N < 2^31;
 }
@@ -25,9 +28,9 @@ class Rans{
         explicit Rans() {
             lut.resize(Lmax);
         }
-        void encode(const u8* input, int in_size, u8* output, int& out_size);
-        void decode(const u8* input, int in_size, u8* output, int out_size);
-        int required_bytes(int in_size) const {
+        void encode(const u8* input, u32 in_size, u8* output, u32& out_size);
+        void decode(const u8* input, u32 in_size, u8* output, u32 out_size);
+        u32 required_bytes(u32 in_size) const {
             assert_size(in_size);
             return in_size*2 + sizeof(u32)*3 + sizeof(u8)*2 + cnt::M*(sizeof(u16) + sizeof(u8));
         }
@@ -37,7 +40,7 @@ class Rans{
         std::vector<u8> lut;
 };
 
-void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
+void Rans::encode(const u8* input, u32 in_size, u8* output, u32& out_size) {
     assert_size(in_size);
     assert( (1ull << (8*sizeof(u16)) == (u64)Bflush) );
     auto fr { c.count(input, in_size) };
@@ -67,7 +70,7 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
     const int logL = cnt::int_log(L);
     assert( (int)L >= M );
     // std::cout << "L encode: " << L << std::endl;
-    const u8* out_ptr = output;
+    u8* out_ptr = output;
     // header: frequency table in 16-bit format
     // std::cout << " write frequency tables: M: " << M << ": ";
     *(u8*)out_ptr = M-1;
@@ -75,27 +78,29 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
     *(u8*)out_ptr = (u8)logL;
     out_ptr += sizeof(u8);
     std::array<u32, cnt::M> symbol_to_idx;
-    for (int i=0; i<M; ++i) {
+    for (size_t i=0; i<M; ++i) {
         symbol_to_idx[idx_to_symbol[i]] = i;
         *(u8*)out_ptr = (u8)idx_to_symbol[i];
         out_ptr += sizeof(u8);
-        *(u16*)out_ptr = (u16)(fr[i] - 1);
+        // *(u16*)out_ptr = (u16)(fr[i] - 1);
+        io::copy_to_mem_16(static_cast<u16>(fr[i]-1), out_ptr, sizeof(u16));
         out_ptr += sizeof(u16);
         // std::cout << " write sym: " << idx_to_symbol[i] << ", f: " << fr[i] << "; ";
         // std::cout << (u16)fr[i] << ", ";
     }
     // std::cout << " M: " << M << std::endl;
-    const u8* x_ptr = out_ptr;
+    u8* const x_ptr = out_ptr;
     out_ptr += sizeof(u32);
-    const u8* y_ptr = out_ptr;
+    u8* const y_ptr = out_ptr;
     out_ptr += sizeof(u32);
-    *(u32*)out_ptr = in_size;
+    // *(u32*)out_ptr = in_size;
+    io::copy_to_mem_32(in_size, out_ptr, sizeof(u32));
     out_ptr += sizeof(u32);
     // std::cout << " write in size: " << in_size << std::endl;
     // x = [f, B*f) <=> [L, L*B); B - the parameter which determines output flushing
     u32 x = (in_size > 1) ? fr[symbol_to_idx[input[0]]] : 1;
     u32 y = (in_size > 1) ? fr[symbol_to_idx[input[1]]] : 1;
-    int i = 0;
+    size_t i = 0;
     while (i < in_size/2) {
         // std::cout << " encode: step i: " << i << std::endl;
         const int idx1 = symbol_to_idx[input[2*i]];
@@ -108,13 +113,15 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
             y += ( (y / f2) * (L - f2) + cum_fr2 );
         };
         if ((u64)x >= (u64)(f1)*Bflush) {   // flush output
-            *(u16*)out_ptr = x & (Bflush - 1);
+            // *(u16*)out_ptr = x & (Bflush - 1);
+            io::copy_to_mem_16(static_cast<u16>(x & (Bflush - 1)), out_ptr, sizeof(u16));
             out_ptr += sizeof(u16);
             x >>= 8*sizeof(u16);
             // std::cout << " after flush: x: " << x << std::endl;
         }
         if ((u64)y >= (u64)(f2)*Bflush) {   // flush output
-            *(u16*)out_ptr = y & (Bflush - 1);
+            // *(u16*)out_ptr = y & (Bflush - 1);
+            io::copy_to_mem_16(static_cast<u16>(y & (Bflush - 1)), out_ptr, sizeof(u16));
             out_ptr += sizeof(u16);
             y >>= 8*sizeof(u16);
             //  std::cout << " after flush: y: " << y << std::endl;
@@ -128,14 +135,16 @@ void Rans::encode(const u8* input, int in_size, u8* output, int& out_size) {
         *(u8*)out_ptr = input[in_size-1];
         out_ptr += sizeof(u8);
     }
-    *(u32*)x_ptr = x;
-    *(u32*)y_ptr = y;
+    // *(u32*)x_ptr = x;
+    // *(u32*)y_ptr = y;
+    io::copy_to_mem_32(x, x_ptr, sizeof(u32));
+    io::copy_to_mem_32(y, y_ptr, sizeof(u32));
     // std::cout << " write x: " << x << std::endl;
     // std::cout << " write y: " << y << std::endl;
     out_size = out_ptr - output;
 }
 
-void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
+void Rans::decode(const u8* input, u32 in_size, u8* output, u32 out_size) {
     const u8* in_ptr = input;
     cs[0] = 0;
     // header: frequency table in 16-bit format
@@ -158,8 +167,11 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
         while (++i < M) {   
             symbols[i] = *(u8*)in_ptr;
             in_ptr += sizeof(u8);
-            const u32 f = (u32)(*(u16*)in_ptr) + 1;
+            // const u32 f = (u32)(*(u16*)in_ptr) + 1;
+            u16 f0;
+            io::read_mem_16(f0, in_ptr, sizeof(u16));
             in_ptr += sizeof(u16);
+            u32 f = static_cast<u32>(f0) + 1;
             // std::cout << " read sym: " << int(symbols[i]) << ", f: " << f << "; ";
             cs[i+1] = cs[i] + f;
             if (! lut.empty()) {
@@ -170,13 +182,19 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
         }
     }
     // std::cout << std::endl;
-    u32 x = *(u32*)in_ptr;
+    // u32 x = *(u32*)in_ptr;
+    u32 x;
+    io::read_mem_32(x, in_ptr, sizeof(u32));
     in_ptr += sizeof(u32);
-    u32 y = *(u32*)in_ptr;
+    // u32 y = *(u32*)in_ptr;
+    u32 y;
+    io::read_mem_32(y, in_ptr, sizeof(u32));
     in_ptr += sizeof(u32);
     // std::cout << " read x: " << x << std::endl;
     // std::cout << " read y: " << y << std::endl;
-    const int decompressed_size = *(u32*)in_ptr;
+    // const int decompressed_size = *(u32*)in_ptr;
+    u32 decompressed_size;
+    io::read_mem_32(decompressed_size, in_ptr, sizeof(u32));
     in_ptr += sizeof(u32);
     // std::cout << " read decomp size: " << decompressed_size << std::endl;
     assert( decompressed_size == out_size );
@@ -192,25 +210,36 @@ void Rans::decode(const u8* input, int in_size, u8* output, int out_size) {
         if ((!y_is_good) && (!x_is_good) && is_two_enough) {
             in_ptr -= sizeof(u16);
             y <<= 8*sizeof(u16);
-            y |= *(u16*)in_ptr;
+            // y |= *(u16*)in_ptr;
+            u16 tmp;
+            io::read_mem_16(tmp, in_ptr, sizeof(u16));
+            y |= tmp;
             in_ptr -= sizeof(u16);
             // std::cout << " read stream: y: " << y << std::endl;
             x <<= 8*sizeof(u16);
-            x |= *(u16*)in_ptr;
+            // x |= *(u16*)in_ptr;
+            io::read_mem_16(tmp, in_ptr, sizeof(u16));
+            x |= tmp;
             // std::cout << " read stream: x: " << x << std::endl;
             return;
         }
         if ((!y_is_good) && (x_is_good) && is_one_enough) {
             in_ptr -= sizeof(u16);
             y <<= 8*sizeof(u16);
-            y |= *(u16*)in_ptr;
+            // y |= *(u16*)in_ptr;
+            u16 tmp;
+            io::read_mem_16(tmp, in_ptr, sizeof(u16));
+            y |= tmp;
             // std::cout << " read stream: only y: " << y << std::endl;
             return;
         }
         if ((y_is_good) && (!x_is_good) && is_one_enough) {
             in_ptr -= sizeof(u16);
             x <<= 8*sizeof(u16);
-            x |= *(u16*)in_ptr;
+            // x |= *(u16*)in_ptr;
+            u16 tmp;
+            io::read_mem_16(tmp, in_ptr, sizeof(u16));
+            x |= tmp;
             // std::cout << " read stream: only x: " << x << std::endl;
             return;
         }
