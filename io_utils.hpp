@@ -32,19 +32,29 @@ bool is_big_endian() {
 void copy_to_mem_16(uint16_t x, uint8_t* buffer, size_t size) {
     static_assert(sizeof(buffer[0]) == 1, "");
     assert(size >= sizeof(uint16_t));
-    if (! is_little_endian()) {
+    if (is_little_endian()) {
+        std::memcpy(buffer, &x, sizeof(uint16_t));
+        return;
+    }
+    // if (! is_little_endian()) {
+    {
         const uint16_t t = x;
         x = ((t >> 8) & 0xff);
         x |= ((t << 8) & 0xff00);
         // std::swap(buffer[0], buffer[1]);
+        std::memcpy(buffer, &x, sizeof(uint16_t));
     }
-    std::memcpy(buffer, &x, sizeof(uint16_t));
 }
 
 void copy_to_mem_32(uint32_t x, uint8_t* buffer, size_t size) {
     static_assert(sizeof(buffer[0]) == 1, "");
     assert(size >= sizeof(uint32_t));
-    if (! is_little_endian()) {
+    if (is_little_endian()) {
+        std::memcpy(buffer, &x, sizeof(uint32_t));
+        return;
+    }
+    // if (! is_little_endian()) {
+    {
         const uint32_t t = x;
         x = ((t >> 24) & 0xff);
         x |= ((t >> 8) & 0xff00);
@@ -52,8 +62,8 @@ void copy_to_mem_32(uint32_t x, uint8_t* buffer, size_t size) {
         x |= ((t << 24) & 0xff000000);
         // std::swap(buffer[0], buffer[3]);
         // std::swap(buffer[1], buffer[2]);
+        std::memcpy(buffer, &x, sizeof(uint32_t));
     }
-    std::memcpy(buffer, &x, sizeof(uint32_t));
 }
 
 void read_mem_16(uint16_t& x, const uint8_t* buffer, size_t size) {
