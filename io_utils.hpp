@@ -90,8 +90,6 @@ void read_mem_32(uint32_t& x, const uint8_t* buffer, size_t size) {
     }
 }
 
-};
+}; // struct io_utils
 
-static io_utils io;
-
-}
+} // namespace io_u

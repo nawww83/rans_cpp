@@ -41,14 +41,15 @@ static timer_n::Timer timer;
 
 int main() {
     using namespace std;
+    io_u::io_utils io;
 
     const auto seed = std::time(0);
     std::srand(seed);
     cout << "Welcome!\n";
     cout << "Seed: " << seed << "\n";
-    cout << "Endianess: " << (io_u::io.is_little_endian() ? "LE\n" : "Not LE\n");
-    cout << "Endianess: " << (io_u::io.is_big_endian() ? "BE\n" : "Not BE\n");
-    assert( io_u::io.is_little_endian() ^ io_u::io.is_big_endian());
+    cout << "Endianess: " << (io.is_little_endian() ? "LE\n" : "Not LE\n");
+    cout << "Endianess: " << (io.is_big_endian() ? "BE\n" : "Not BE\n");
+    assert( io.is_little_endian() ^ io.is_big_endian());
     //
     constexpr int Q = 128;
     std::vector<GeometricDistribution<int>> gd{};
