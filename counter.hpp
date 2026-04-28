@@ -4,8 +4,12 @@
 #include <type_traits>
 #include <array>
 #include <cassert>
-#include <algorithm>
-
+#include <algorithm> // std::clamp
+#include <cstring>   // std::memcpy
+#include <cstdint>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 namespace cnt {
 
@@ -16,81 +20,64 @@ using u64 = uint64_t;
 
 constexpr int M = 256; // byte-wise counter
 
-template <typename T>
-static bool all_bytes_equal(T x) {
-    return ((((x << 8) ^ x) >> 8) == 0);
+static int int_log(uint64_t x) {
+    if (x <= 1) return 0;
+#ifdef _MSC_VER
+    unsigned long leading_zero = 0;
+    // MSVC ищет индекс самого значимого бита (справа налево)
+    if (_BitScanReverse64(&leading_zero, x - 1))
+        return static_cast<int>(leading_zero + 1);
+    return 0;
+#else
+    // Clang/GCC считают количество нулей слева
+    return 64 - __builtin_clzll(x - 1);
+#endif
 }
-
-template <typename T>
-static int int_log(T x) {
-    int log_x = 0;
-    while (true) {
-        if ((1ull << log_x) >= (u64)x) {
-            break;
-        }
-        log_x += 1;
-    }
-    return log_x;
-}
-
 
 template <u32 Lmax, u32 Lmin=256>
 class Counter {
 public:
     explicit Counter() = default;
     auto count(const u8* input, size_t n) {
-        std::array<u32, M> f {};
+        std::array<u32, M> f{};
         const std::pair<size_t, size_t> q { n / 4, n % 4};
-        std::array<u32, 4> idx;
-        for (size_t i=0; i<q.first; ++i) {
-            const auto A = *(u32*)(input + 4*i);
-            const bool eq = all_bytes_equal(A);
-            idx = {u8(A >> 0), u8(A >> 8), u8(A >> 16), u8(A >> 24)};
-            f[idx[0]] += eq ? 4 : 1;
-            f[idx[1]] += eq ? 0 : 1;
-            f[idx[2]] += eq ? 0 : 1;
-            f[idx[3]] += eq ? 0 : 1;
+        for (size_t i = 0; i < q.first; ++i) {
+            u32 A;
+            std::memcpy(&A, input + i * 4, 4);
+            f[u8(A)]++;
+            f[u8(A >> 8)]++;
+            f[u8(A >> 16)]++;
+            f[u8(A >> 24)]++;
         }
-        for (size_t i=0; i<q.second; ++i) {
-            f[input[q.first*4 + i]] += 1;
+        for (size_t i = 0; i < q.second; ++i) {
+            f[input[q.first * 4 + i]]++;
         }
-        // renormalize
-        std::array<u64, M+1> cs {0};
-        // std::cout << "Unnormalized frequencies: ";
+        // Renormalization.
+        std::array<u64, M + 1> cs {0};
         u32 min_f = u32(-1); // minimal non-zero frequency
-        for (int i=0; i<M; ++i) {
-            cs[i+1] = cs[i] + f[i];
-            if (f[i] == 0) {
-                continue;
-            }
-            min_f = (f[i] < min_f) ? f[i] : min_f;
-            // std::cout << f[i] << ", ";
+        for (int i = 0; i < M; ++i) {
+            cs[i + 1] = cs[i] + f[i];
+            if (f[i] > 0 && f[i] < min_f) min_f = f[i];
         }
-        // std::cout << std::endl;
         assert( min_f != u32(-1) );
         const u64 N = cs[M];
-        u32 L = (N / min_f) + 1; // minimal L when dynamic range correction is not needed: L > floor( N / minimal f)
-        // std::cout << "Counter L: " << L << ", min f: " << min_f << ", N: " << N << std::endl;
-        const int logL = int_log(L);
-        L = (1u << logL);
-        // std::cout << " CC L: " << L << std::endl;
-        L = std::min(L, Lmax);
-        L = std::max(L, Lmin);
-        // std::cout << " CCC L: " << L << std::endl;
+        u32 L = (u32)(N / min_f) + 1; // Min. L when dynamic range correction is not needed: L > floor( N / minimal f)
+        L = 1u << int_log(L);
+        L = std::clamp(L, Lmin, Lmax);
         int exceed = 0;
-        for (int i=0; i<M; ++i) {
-            const bool is_non_zero = (f[i] > 0);
+        for (int i = 0; i < M; ++i) {
+            const bool is_non_zero = f[i] > 0;
             cs[i + 1] *= L;
             cs[i + 1] /= N;
             f[i] = cs[i + 1] - cs[i];
-            const bool is_zero = (f[i] == 0);
+            const bool is_zero = f[i] == 0;
             if (is_non_zero && is_zero) { // dynamic range failure
                 f[i] = 1;
                 exceed++;
             }
         }
         // correct the dynamic range failures
-        for (int i=0; i<M; ++i) {
+        for (int i = 0; i < M; ++i) {
             if (exceed > 0) {
                 if (f[i] > 1) {
                     f[i] -= 1;
@@ -98,7 +85,6 @@ public:
                 }
             }
         }
-        //
         return f;
     }
 };
