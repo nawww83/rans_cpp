@@ -6,9 +6,8 @@
 			"label": "C/C++: g++ build active file",
 			"command": "/usr/bin/g++",
 			"args": [
-				"-fdiagnostics-color=always",
-				"-g",
-				"-O2",
+				"-fdiagnostics-color=always",				
+				"-O3",
 				"-std=c++20",
 				"${file}",
 				"-o",

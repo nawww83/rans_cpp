@@ -38,7 +38,11 @@ template <u32 Lmax, u32 Lmin=256>
 class Counter {
 public:
     explicit Counter() = default;
-    auto count(const u8* input, size_t n) {
+    struct Result {
+        std::array<u32, M> frequencies;
+        u32 Lscale;
+    };
+    Result count(const u8* input, size_t n) {
         std::array<u32, M> f{};
         const std::pair<size_t, size_t> q { n / 4, n % 4};
         for (size_t i = 0; i < q.first; ++i) {
@@ -85,7 +89,7 @@ public:
                 }
             }
         }
-        return f;
+        return {f, L};
     }
 };
 

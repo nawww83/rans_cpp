@@ -37,9 +37,7 @@ public:
     }
 
     template<typename T>
-    static void copy_to_mem(T x, uint8_t* buffer, size_t size) {
-        if (size < sizeof(T)) return; // Или assert
-
+    static void copy_to_mem(T x, uint8_t* buffer) {
         if constexpr (!is_little_endian()) {
             x = byteswap(x);
         }
@@ -47,14 +45,24 @@ public:
     }
 
     template<typename T>
-    static void read_mem(T& x, const uint8_t* buffer, size_t size) {
-        if (size < sizeof(T)) return;
-
+    static void read_mem(T& x, const uint8_t* buffer) {
         std::memcpy(&x, buffer, sizeof(T));
         if constexpr (!is_little_endian()) {
             x = byteswap(x);
         }
     }
+
+    // "Быстрая" версия внутри io_utils специально для горячих циклов
+    template<typename T>
+    [[nodiscard]] static inline T read_val(const uint8_t* buffer) {
+        T x;
+        std::memcpy(&x, buffer, sizeof(T));
+        if constexpr (!is_little_endian()) {
+            x = byteswap(x);
+        }
+        return x;
+    }
+
 };
 
 } // namespace io_u
