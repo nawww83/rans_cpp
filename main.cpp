@@ -71,8 +71,8 @@ int main() {
     rans::Rans rans;
     long long iters = 0;
     double perf_iters = 0;
-    // constexpr size_t N_max = 8*1024*1024; // slow test
-    constexpr size_t N_max = 256*1024; // meduim test
+    constexpr size_t N_max = 8*1024*1024; // slow test
+    // constexpr size_t N_max = 256*1024; // meduim test
     // constexpr size_t N_max = 512; // ultra fast test
     const size_t N_performance_is_mearured = N_max / 4;
     std::vector<u8> v; v.reserve(N_max);
