@@ -2,7 +2,7 @@
 Byte-wise range ANS codec C++ implementation
 
 # Features
-- Two-stream mode: even/odd input symbols are encoded by its own stream
+- Quad interleave mode
 - 16-bit flushing, 32-bit arithmetic
 - Symbol frequency sorting
 - 16-bit per frequency in the frequency table
@@ -17,11 +17,10 @@ g++ main.cpp -O3 -std=c++20 -o rans
 ./rans
 
 # Average performance
-- Compression: 160 MB/s
-- Decompression: 225 MB/s
+- Compression: 350 MB/s per core
+- Decompression: 510 MB/s per core
 
 Under the conditions:
-- The input size is more than 2MB
-- CPU Intel i7-8565U CPU 4.2GHz
-- Compiler GCC 11.4
-- Ubuntu 22.04 WSL
+- The input size is in (2...8) MB
+- CPU 12th Gen Intel© Core™ i7-12700 (~4500 MHz)
+- Compiler GCC 11.4.1, Linux
