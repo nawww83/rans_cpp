@@ -14,11 +14,11 @@ Byte-wise range ANS codec C++ implementation
 g++ main.cpp -O3 -std=c++20 -o rans
 
 # Average performance (variate the Geometric distribution parameter)
-4.5 GHz (desktop, Linux native, default turbo boost):
+4.5 GHz (desktop, Linux native, default turbo boost, Intel Core i7 12th Gen):
 - Compression: 350 MB/s per core (77.7 MB/s/GHz)
 - Decompression: 510 MB/s per core (113.3 MB/s/GHz).
 
-1.99 Ghz (laptop, WSL Ubuntu, switch off turbo boost):
+1.99 Ghz (laptop, WSL Ubuntu, switch off turbo boost, Intel Core i7 8th Gen):
 - Compression: 120 MB/s per core (60 MB/s/GHz)
 - Decompression: 195 MB/s per core (98 MB/s/GHz).
 
