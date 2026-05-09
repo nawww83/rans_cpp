@@ -22,4 +22,6 @@ g++ main.cpp -O3 -std=c++20 -o rans
 - Decompression: 195 MB/s per core (98 MB/s/GHz).
 Under the conditions:
 - The input size is in [2, 8] MB
-- Compiler GCC 11.4.
+- Compilers:
+  * GCC 11.4 (desktop)
+  * GCC 12.5 (WSL Ubuntu).
