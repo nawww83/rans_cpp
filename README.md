@@ -17,9 +17,11 @@ g++ main.cpp -O3 -std=c++20 -o rans
 4.5 GHz (desktop, Linux native, default turbo boost):
 - Compression: 350 MB/s per core (77.7 MB/s/GHz)
 - Decompression: 510 MB/s per core (113.3 MB/s/GHz).
+
 1.99 Ghz (laptop, WSL Ubuntu, switch off turbo boost):
 - Compression: 120 MB/s per core (60 MB/s/GHz)
 - Decompression: 195 MB/s per core (98 MB/s/GHz).
+
 Under the conditions:
 - The input size is in [2, 8] MB
 - Compilers:
