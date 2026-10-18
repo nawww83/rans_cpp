@@ -43,21 +43,25 @@ public:
         u32 Lscale;
     };
     // Сырая гистограмма байтов.
+    // Четыре независимых счётчика на четыре байта: на скошенных данных
+    // (например, p=0.9) один массив даёт цепочку read-modify-write к одному
+    // и тому же элементу, а независимые массивы выполняются параллельно.
     static std::array<u32, M> histogram(const u8* input, size_t n) {
-        std::array<u32, M> f{};
-        const std::pair<size_t, size_t> q { n / 4, n % 4};
-        for (size_t i = 0; i < q.first; ++i) {
+        std::array<u32, M> f0{}, f1{}, f2{}, f3{};
+        size_t i = 0;
+        for (; i + 3 < n; i += 4) {
             u32 A;
-            std::memcpy(&A, input + i * 4, 4);
-            f[u8(A)]++;
-            f[u8(A >> 8)]++;
-            f[u8(A >> 16)]++;
-            f[u8(A >> 24)]++;
+            std::memcpy(&A, input + i, 4);
+            f0[u8(A)]++;
+            f1[u8(A >> 8)]++;
+            f2[u8(A >> 16)]++;
+            f3[u8(A >> 24)]++;
         }
-        for (size_t i = 0; i < q.second; ++i) {
-            f[input[q.first * 4 + i]]++;
+        for (; i < n; ++i) f0[input[i]]++;
+        for (int j = 0; j < M; ++j) {
+            f0[j] += f1[j] + f2[j] + f3[j];
         }
-        return f;
+        return f0;
     }
 
     // Выбор масштаба L по сырой гистограмме.

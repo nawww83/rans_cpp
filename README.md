@@ -9,7 +9,7 @@ A compact and fast entropy coder designed for high-throughput compression and de
 - High throughput on modern CPUs
 - Byte-oriented rANS design
 - Optimized for 32-bit arithmetic and compact frequency tables
-- Fast symbol counting and frequency sorting
+- Fast four-lane symbol counting
 - Selectable frequency quantization: from exact (arithmetic-coding-like) to Huffman-like
 - Self-describing stream: the decoder does not need to be told the encoder mode
 
@@ -17,11 +17,11 @@ A compact and fast entropy coder designed for high-throughput compression and de
 
 - Quad interleaved rANS
 - 16-bit flushing and 32-bit arithmetic
-- Symbol frequency sorting for cache-friendly decoding
+- Direct symbol-indexed encoder tables (no per-block sort)
 - Compact bit-packed frequency table
 - Automatic scale selection via parameter `L` (power of two, `256 <= L <= 65536`)
 - Free-remainder rANS transformation using only `div` (no `mod` required)
-- Fast symbol counter
+- Four-lane symbol counter that breaks read-modify-write dependencies
 - Four frequency-normalization modes with specialized encoder paths
 
 ## Quantization modes
@@ -60,7 +60,7 @@ present in the input, where `L` is a power of two.
 |------|-------------------|
 | `Precise` | `x / f` (hardware `div`) |
 | `Pow2` | `x >> a` |
-| `Pow23` / `Pow235` | `x >> a`, then reciprocal multiplication by `1 / (3^b)` or `1 / (3^b * 5^c)` with an exact correction step |
+| `Pow23` / `Pow235` | `x >> a`, then multiplication by `ceil(2^48 / odd)` and `>> 48`; exact because `y < odd * Bflush`, so no correction step is needed |
 
 ## Stream header
 
@@ -253,13 +253,13 @@ Representative medians from the distribution sweep on a WSL laptop
 
 | Mode | Redundancy | Enc MB/s | Dec MB/s |
 |------|-----------:|---------:|---------:|
-| `Precise` | ~0.16 % | ~187 | ~305 |
-| `Pow235` | ~0.16 % | ~218 | ~308 |
-| `Pow23` | ~0.20 % | ~220 | ~308 |
-| `Pow2` | ~1.8 % | ~235 | ~317 |
+| `Precise` | ~0.16 % | ~198 | ~305 |
+| `Pow235` | ~0.16 % | ~241 | ~308 |
+| `Pow23` | ~0.20 % | ~244 | ~308 |
+| `Pow2` | ~1.8 % | ~263 | ~317 |
 
 `Pow2` is fastest but least compact. `Precise` and `Pow235` are essentially
-tied on redundancy, but `Pow235` encodes ~17% faster because it replaces
+tied on redundancy, but `Pow235` encodes ~22% faster because it replaces
 hardware division with a shift and an exact magic reciprocal. `Pow23` is
 slightly less compact and about as fast as `Pow235`. Decompression is
 essentially mode-independent, since every mode decodes with the same
@@ -269,7 +269,32 @@ The encoder precomputes `fr * Bflush`, `L - fr`, and the 48-bit magic
 reciprocal, so the non-power-of-two modes need neither a division nor a
 correction step in the hot loop. The remaining limit is the dependent rANS
 state update and renormalization, not the division alone: across the sweep the
-quantized modes encode 15-30% faster than `Precise`, not 2x.
+quantized modes encode 22-33% faster than `Precise`, not 2x.
+
+Two changes account for most of the encode gain in this version. First, byte
+counting uses four independent histograms instead of one: at `p = 0.9` the
+single histogram serializes four read-modify-write operations on the same
+element, while the four-lane version runs them in parallel. This alone improves
+encode by ~27% at `p = 0.9`, ~6% at `p = 0.6`, and a few percent at low `p`.
+Second, the encoder tables are indexed directly by symbol, so the hot loop no
+longer loads `symbol_to_idx[symbol]` and the per-block frequency sort is gone
+(another ~8% across the sweep). The header is now written in symbol order;
+compressed size differs from the sorted order only by a few bytes per block.
+
+Decoding is unchanged and remains latency-bound. The 64 KiB `mLut` does not fit
+in L1, but it is L2-resident and four independent streams hide most of that
+latency: forcing `L` down to 32 KiB or 16 KiB removed most L1 misses but made
+decode only ~2% faster, so it is not worth the compression loss. Compiling with
+`-DRANS_NATIVE=ON` (`-march=native`) improves decode by roughly 8-10% on this
+CPU and encode slightly at high skew.
+
+Fixed per-block costs matter for small buffers. At 64 KiB and `p = 0.1`, the
+histogram is ~24 µs, the `Pow23` quantizer is ~42 µs (`Pow2` ~15 µs,
+`Pow235` ~26 µs, `Precise` ~2 µs), and encode takes ~260 µs. At 4 MiB the
+quantizer and table-fill costs fall below 1% of encode time, while the
+histogram still accounts for roughly 7-15% (it is already included in the
+throughput table). The decoder also fills up to 64 KiB of `mLut` per block
+(~1-2 µs), which is negligible for large blocks but visible for tiny ones.
 
 ## Notes
 

@@ -88,44 +88,34 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     }
     const int logL = cnt::int_log(L);
 
-    // 2. Группируем и сортируем (символ + его частота).
-    struct SymFreq { u8 sym; u32 f; };
-    std::array<SymFreq, cnt::M> sorted;
-    u32 Ms = 0;
-    for (int i = 0; i < cnt::M; ++i) {
-        if (freq[i] > 0) sorted[Ms++] = {static_cast<u8>(i), freq[i]};
-    }
-
-    // Сортировка по убыванию частоты для кэш-локальности декодера
-    std::sort(sorted.begin(), sorted.begin() + Ms, [](const SymFreq& a, const SymFreq& b) {
-        return a.f > b.f;
-    });
-
-    // 3. Строим таблицы накопленных частот, маппинг и данные для спец-путей.
-    std::array<u32, cnt::M> symbol_to_idx{};
-    std::array<u32, cnt::M> fr{}; // Отсортированные частоты
+    // 2. Таблицы индексируются непосредственно символом: сортировка по
+    //    частоте не нужна (mLut декодера и так строится по диапазонам
+    //    состояний, а dec_table целиком помещается в L1).
+    std::array<u32, cnt::M> fr{}; // Частоты по символам
     std::array<u32, cnt::M> cs{}; // Накопленные частоты
     std::array<u8,  cnt::M> sh{}; // Степень двойки в частоте
     std::array<u64, cnt::M> magic{}; // ceil(2^48 / odd): точное деление без коррекции
     std::array<u64, cnt::M> thr{}; // fr[i] * Bflush (порог ренормализации)
     std::array<u32, cnt::M> lmf{}; // L - fr[i]
+    u32 Ms = 0;
     u32 cumulative = 0;
-    for (u32 i = 0; i < Ms; ++i) {
-        fr[i] = sorted[i].f;
-        cs[i] = cumulative;
-        cumulative += fr[i];
-        symbol_to_idx[sorted[i].sym] = i;
+    for (u32 sym = 0; sym < cnt::M; ++sym) {
+        const u32 f = freq[sym];
+        if (f == 0) continue;
+        ++Ms;
+        fr[sym] = f;
+        cs[sym] = cumulative;
+        cumulative += f;
 
-        const u32 f = fr[i];
         int tz = 0;
         while (((f >> tz) & 1u) == 0) ++tz;
-        sh[i] = static_cast<u8>(tz);
+        sh[sym] = static_cast<u8>(tz);
         const u32 odd = f >> tz;
         // y < odd * Bflush <= 2^32, поэтому (y * ceil(2^48/odd)) >> 48
         // равно floor(y / odd) без корректирующего умножения.
-        magic[i] = ((u64(1) << 48) + odd - 1) / odd;
-        thr[i] = static_cast<u64>(f) * Bflush;
-        lmf[i] = L - f;
+        magic[sym] = ((u64(1) << 48) + odd - 1) / odd;
+        thr[sym] = static_cast<u64>(f) * Bflush;
+        lmf[sym] = L - f;
     }
     assert(cumulative == L);
 
@@ -141,13 +131,14 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     *(out_ptr++) = static_cast<u8>((static_cast<u32>(mode) << 5) | static_cast<u32>(logL));
     {
         qnt::BitWriter bw(out_ptr);
-        for (u32 i = 0; i < Ms; ++i) {
-            bw.put(sorted[i].sym, 8);
+        for (u32 sym = 0; sym < cnt::M; ++sym) {
+            if (fr[sym] == 0) continue;
+            bw.put(sym, 8);
             if (mode == qnt::Mode::Precise) {
-                bw.put(fr[i] - 1, 16);
+                bw.put(fr[sym] - 1, 16);
             } else {
                 u32 a, b, c;
-                qnt::pow_exponents(fr[i], a, b, c);
+                qnt::pow_exponents(fr[sym], a, b, c);
                 bw.put(a, 5);
                 if (mode != qnt::Mode::Pow2) bw.put(b, 4);
                 if (mode == qnt::Mode::Pow235) bw.put(c, 3);
@@ -186,10 +177,10 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
 
         u32 i = 0;
         for (; i + 3 < in_size; i += 4) {
-            const u32 idx_x = symbol_to_idx[input[i]];
-            const u32 idx_y = symbol_to_idx[input[i+1]];
-            const u32 idx_z = symbol_to_idx[input[i+2]];
-            const u32 idx_w = symbol_to_idx[input[i+3]];
+            const u32 idx_x = input[i];
+            const u32 idx_y = input[i+1];
+            const u32 idx_z = input[i+2];
+            const u32 idx_w = input[i+3];
 
             // Нормализация для всех четырех (выталкиваем в out_ptr).
             // thr[] = fr[] * Bflush и lmf[] = L - fr[] посчитаны заранее.
@@ -206,19 +197,19 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         }
 
         if (i < in_size) {
-            const u32 idx_x = symbol_to_idx[input[i]];
+            const u32 idx_x = input[i];
             if (x >= thr[idx_x]) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
             x += divf(x, idx_x) * lmf[idx_x] + cs[idx_x];
             i++;
         }
         if (i < in_size) {
-            const u32 idx_y = symbol_to_idx[input[i]];
+            const u32 idx_y = input[i];
             if (y >= thr[idx_y]) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
             y += divf(y, idx_y) * lmf[idx_y] + cs[idx_y];
             i++;
         }
         if (i < in_size) {
-            const u32 idx_z = symbol_to_idx[input[i]];
+            const u32 idx_z = input[i];
             if (z >= thr[idx_z]) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
             z += divf(z, idx_z) * lmf[idx_z] + cs[idx_z];
             i++;
