@@ -253,16 +253,23 @@ Representative medians from the distribution sweep on a WSL laptop
 
 | Mode | Redundancy | Enc MB/s | Dec MB/s |
 |------|-----------:|---------:|---------:|
-| `Precise` | ~0.16 % | ~160 | ~295 |
-| `Pow235` | ~0.16 % | ~180 | ~295 |
-| `Pow23` | ~0.20 % | ~180 | ~295 |
-| `Pow2` | ~1.8 % | ~205 | ~300 |
+| `Precise` | ~0.16 % | ~187 | ~305 |
+| `Pow235` | ~0.16 % | ~218 | ~308 |
+| `Pow23` | ~0.20 % | ~220 | ~308 |
+| `Pow2` | ~1.8 % | ~235 | ~317 |
 
 `Pow2` is fastest but least compact. `Precise` and `Pow235` are essentially
-tied on redundancy, but `Pow235` encodes faster because it replaces division
-with a shift and a reciprocal multiply. `Pow23` is slightly less compact and
-about as fast as `Pow235`. Decompression is essentially mode-independent,
-since every mode decodes with the same multiplication-based rANS step.
+tied on redundancy, but `Pow235` encodes ~17% faster because it replaces
+hardware division with a shift and an exact magic reciprocal. `Pow23` is
+slightly less compact and about as fast as `Pow235`. Decompression is
+essentially mode-independent, since every mode decodes with the same
+multiplication-based rANS step.
+
+The encoder precomputes `fr * Bflush`, `L - fr`, and the 48-bit magic
+reciprocal, so the non-power-of-two modes need neither a division nor a
+correction step in the hot loop. The remaining limit is the dependent rANS
+state update and renormalization, not the division alone: across the sweep the
+quantized modes encode 15-30% faster than `Precise`, not 2x.
 
 ## Notes
 

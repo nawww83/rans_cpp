@@ -106,8 +106,9 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     std::array<u32, cnt::M> fr{}; // Отсортированные частоты
     std::array<u32, cnt::M> cs{}; // Накопленные частоты
     std::array<u8,  cnt::M> sh{}; // Степень двойки в частоте
-    std::array<u32, cnt::M> odd{}; // Нечётная часть частоты
-    std::array<u64, cnt::M> recip{}; // Округлённое вверх 2^32 / odd
+    std::array<u64, cnt::M> magic{}; // ceil(2^48 / odd): точное деление без коррекции
+    std::array<u64, cnt::M> thr{}; // fr[i] * Bflush (порог ренормализации)
+    std::array<u32, cnt::M> lmf{}; // L - fr[i]
     u32 cumulative = 0;
     for (u32 i = 0; i < Ms; ++i) {
         fr[i] = sorted[i].f;
@@ -119,8 +120,12 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         int tz = 0;
         while (((f >> tz) & 1u) == 0) ++tz;
         sh[i] = static_cast<u8>(tz);
-        odd[i] = f >> tz;
-        recip[i] = ((u64(1) << 32) + odd[i] - 1) / odd[i];
+        const u32 odd = f >> tz;
+        // y < odd * Bflush <= 2^32, поэтому (y * ceil(2^48/odd)) >> 48
+        // равно floor(y / odd) без корректирующего умножения.
+        magic[i] = ((u64(1) << 48) + odd - 1) / odd;
+        thr[i] = static_cast<u64>(f) * Bflush;
+        lmf[i] = L - f;
     }
     assert(cumulative == L);
 
@@ -171,9 +176,9 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
                 return v >> sh[idx];
             } else {
                 const u32 y = v >> sh[idx];
-                u32 q = static_cast<u32>((static_cast<u64>(y) * recip[idx]) >> 32);
-                q -= static_cast<u32>(static_cast<u64>(q) * odd[idx] > static_cast<u64>(y));
-                return q;
+                // Точное floor(y / odd): ошибка ceil-реципрока меньше 1/odd
+                // на всём диапазоне y < odd * Bflush, коррекция не нужна.
+                return static_cast<u32>((static_cast<u64>(y) * magic[idx]) >> 48);
             }
         };
 
@@ -186,35 +191,36 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
             const u32 idx_z = symbol_to_idx[input[i+2]];
             const u32 idx_w = symbol_to_idx[input[i+3]];
 
-            // Нормализация для всех четырех (выталкиваем в out_ptr)
-            if (x >= static_cast<u64>(fr[idx_x]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
-            if (y >= static_cast<u64>(fr[idx_y]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
-            if (z >= static_cast<u64>(fr[idx_z]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
-            if (w >= static_cast<u64>(fr[idx_w]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(w & mask), out_ptr); out_ptr += 2; w >>= 16; }
+            // Нормализация для всех четырех (выталкиваем в out_ptr).
+            // thr[] = fr[] * Bflush и lmf[] = L - fr[] посчитаны заранее.
+            if (x >= thr[idx_x]) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
+            if (y >= thr[idx_y]) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
+            if (z >= thr[idx_z]) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
+            if (w >= thr[idx_w]) { io.copy_to_mem<u16>(static_cast<u16>(w & mask), out_ptr); out_ptr += 2; w >>= 16; }
 
             // Непосредственно rANS кодирование
-            x += divf(x, idx_x) * (L - fr[idx_x]) + cs[idx_x];
-            y += divf(y, idx_y) * (L - fr[idx_y]) + cs[idx_y];
-            z += divf(z, idx_z) * (L - fr[idx_z]) + cs[idx_z];
-            w += divf(w, idx_w) * (L - fr[idx_w]) + cs[idx_w];
+            x += divf(x, idx_x) * lmf[idx_x] + cs[idx_x];
+            y += divf(y, idx_y) * lmf[idx_y] + cs[idx_y];
+            z += divf(z, idx_z) * lmf[idx_z] + cs[idx_z];
+            w += divf(w, idx_w) * lmf[idx_w] + cs[idx_w];
         }
 
         if (i < in_size) {
             const u32 idx_x = symbol_to_idx[input[i]];
-            if (x >= static_cast<u64>(fr[idx_x]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
-            x += divf(x, idx_x) * (L - fr[idx_x]) + cs[idx_x];
+            if (x >= thr[idx_x]) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
+            x += divf(x, idx_x) * lmf[idx_x] + cs[idx_x];
             i++;
         }
         if (i < in_size) {
             const u32 idx_y = symbol_to_idx[input[i]];
-            if (y >= static_cast<u64>(fr[idx_y]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
-            y += divf(y, idx_y) * (L - fr[idx_y]) + cs[idx_y];
+            if (y >= thr[idx_y]) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
+            y += divf(y, idx_y) * lmf[idx_y] + cs[idx_y];
             i++;
         }
         if (i < in_size) {
             const u32 idx_z = symbol_to_idx[input[i]];
-            if (z >= static_cast<u64>(fr[idx_z]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
-            z += divf(z, idx_z) * (L - fr[idx_z]) + cs[idx_z];
+            if (z >= thr[idx_z]) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
+            z += divf(z, idx_z) * lmf[idx_z] + cs[idx_z];
             i++;
         }
 
