@@ -41,6 +41,11 @@ public:
 template<class Generator>
 void fill_array_randomly(Generator& g, u8 *v, size_t n, bool inversion = false) {
     const u8 xor_mask = inversion ? 0xFF : 0x00;
+    // Младшие 8 бит k ~ Geom(p) дают в точности геометрическое распределение,
+    // усечённое до [0, 255] и перенормированное:
+    //   P(b) = p (1-p)^b / (1 - (1-p)^256).
+    // Свёрнутый хвост k >= 256 — геометрическая прогрессия, поэтому это не
+    // потеря точности, а точная выборка из усечённого распределения.
     for (size_t i = 0; i < n; ++i) {
         v[i] = static_cast<u8>(g() & 0xFF) ^ xor_mask;
     }
@@ -75,6 +80,16 @@ int main() {
         double par = std::max(0.0001, double(q) / Q);
         gd.emplace_back( par );
     }
+
+    // Отдельные прогоны для фиксированных p: от почти равномерного
+    // (p -> 0, геометрическое распределение заворачивается по модулю 256)
+    // до сильно скошенного (p -> 1, почти все байты равны 0).
+    constexpr std::array<double, 9> kFixedP = {
+        0.0001, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 0.6, 0.9
+    };
+    std::vector<GeometricDistribution<int>> fixed_gd;
+    fixed_gd.reserve(kFixedP.size());
+    for (double p : kFixedP) fixed_gd.emplace_back(p);
     double dt = 0;
     auto calc_perf = [&dt](size_t n) {
         return (1.e3 * static_cast<double>(n) / dt); // MB/s
@@ -182,6 +197,48 @@ int main() {
             printf(" %s=%.0f", qnt::mode_name(kModes[mi]), dec);
         }
         printf("\n");
+
+        // Отдельные прогоны для фиксированных p: один и тот же N и inversion
+        // flag для всех режимов, поэтому строки можно сравнивать напрямую.
+        if (measure_perf) {
+            printf("\n Fixed-p benchmarks (N=%zu, inv=%d):\n", N, inv_f ? 1 : 0);
+            printf(" %-8s %6s | %-11s | %8s %9s %9s %9s\n",
+                   "p", "H", "MODE", "CR", "Red%", "Enc", "Dec");
+            printf("----------|--------|-------------|----------|----------|----------|----------\n");
+            for (size_t pi = 0; pi < kFixedP.size(); ++pi) {
+                fill_array_randomly(fixed_gd[pi], v.data(), N, inv_f);
+
+                cnt::Counter<65536> stat_cnt;
+                auto [f_norm, L] = stat_cnt.count(v.data(), N);
+                const double H = calculate_entropy(f_norm, L);
+                const bool h_ok = H > 0.001;
+                const double ideal_cr = h_ok ? 8.0 / H : 0.0;
+
+                for (size_t mi = 0; mi < kModes.size(); ++mi) {
+                    rans::u32 out_size = 0;
+                    timer.reset();
+                    rans.encode(v.data(), (rans::u32)N, output.data(), out_size, kModes[mi]);
+                    dt = timer.elapsed_ns();
+                    const double enc = calc_perf(N);
+
+                    timer.reset();
+                    rans.decode(output.data(), out_size, v_decoded.data(), (rans::u32)N);
+                    dt = timer.elapsed_ns();
+                    const double dec = calc_perf(N);
+
+                    const bool is_equal = std::equal(v.begin(), v.end(), v_decoded.begin());
+                    if (!is_equal) {
+                        std::cout << "Mode " << qnt::mode_name(kModes[mi]) << " FAILED round-trip!\n";
+                    }
+                    assert( is_equal );
+
+                    const double cr = double(N) / double(out_size);
+                    const double red = h_ok ? (ideal_cr / cr - 1.0) * 100.0 : 0.0;
+                    printf(" %-8.4f %6.2f | %-11s | %8.3f %9.2f %9.0f %9.0f\n",
+                           kFixedP[pi], H, qnt::mode_name(kModes[mi]), cr, red, enc, dec);
+                }
+            }
+        }
 
         iters++;
         printf(" Global min CR:");

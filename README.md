@@ -91,10 +91,72 @@ identical to the older 16-bit frequency table.
 
 ## Benchmark
 
-`main.cpp` benchmarks all four modes on identical data. For each experiment it
-draws `N` bytes from a geometric distribution, sweeps the distribution
-parameter over 129 values, and for every value encodes and decodes the same
-buffer with each mode (verifying the round-trip).
+`main.cpp` benchmarks all four modes on identical data.
+
+### Data distribution
+
+Each byte is generated as
+
+```text
+k ~ Geometric(p),   byte = (k mod 256) XOR (inversion ? 0xFF : 0x00)
+```
+
+where `k` is the number of failures before the first success,
+`P(k) = p (1-p)^k`. Keeping the low 8 bits is exact, not a lossy shortcut:
+the folded tail is a geometric series, so
+
+```text
+P(byte = b) = p (1-p)^b / (1 - (1-p)^256),   b = 0..255,
+```
+
+i.e. the geometric distribution **truncated to the 256-symbol alphabet** and
+renormalized. For small `p` (`p << 1/256`) this is almost uniform
+(`H ~ 8` bits); for `p -> 1` it concentrates on `0x00` (`H -> 0`). The sweep
+`p = max(0.0001, q/128)`, `q = 0..128`, covers the whole range.
+
+The `inversion` flag XORs the bytes with `0xFF`; it mirrors the alphabet
+(`0x00 <-> 0xFF`) and checks that the codec does not depend on symbol order.
+
+`N` is drawn uniformly from `[1, N_max]` (`N_max = 8 MB` by default), so the
+sweep also exercises header overhead on small inputs. For every `p` the same
+buffer is encoded and decoded by all four modes, and each round-trip is
+verified.
+
+### Fixed-p runs
+
+The main table aggregates the 129 `p` values (min/median). Because a single
+median hides the behavior at the extremes, `main.cpp` also prints a
+`Fixed-p benchmarks` table (for `N >= N_max / 4`) with
+
+```text
+p = 0.0001, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 0.6, 0.9
+```
+
+and the same `N` and inversion flag. It shows, for example, that `Pow2` stays
+within ~0.7 percentage points of `Precise` up to `p = 0.3` but loses badly at
+`p = 0.9` (very skewed data), while `Pow23`/`Pow235` track `Precise` across the
+whole range.
+
+### Redundancy
+
+For each buffer the benchmark computes the normalized histogram `f[256]`
+(sum `L`, `L` a power of two) and its entropy
+
+```text
+H = -sum_i (f[i]/L) * log2(f[i]/L)      [bits per byte]
+```
+
+The ideal compression ratio is `ideal_CR = 8 / H`, the actual one is
+`CR = N / compressed_size`, and
+
+```text
+redundancy = (ideal_CR / CR - 1) * 100   [%]
+```
+
+`compressed_size` includes the rANS header (packed frequencies, `L`, original
+size) and the final encoder state, so small-input runs measure the header cost
+as well as the coding cost. Runs with `H <= 0.001` are reported as 0%
+(entropy is too small for a meaningful ratio).
 
 Reported per mode:
 
