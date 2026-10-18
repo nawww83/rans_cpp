@@ -42,7 +42,8 @@ public:
         std::array<u32, M> frequencies;
         u32 Lscale;
     };
-    Result count(const u8* input, size_t n) {
+    // Сырая гистограмма байтов.
+    static std::array<u32, M> histogram(const u8* input, size_t n) {
         std::array<u32, M> f{};
         const std::pair<size_t, size_t> q { n / 4, n % 4};
         for (size_t i = 0; i < q.first; ++i) {
@@ -56,24 +57,38 @@ public:
         for (size_t i = 0; i < q.second; ++i) {
             f[input[q.first * 4 + i]]++;
         }
-        // Renormalization.
-        std::array<u64, M + 1> cs {0};
+        return f;
+    }
+
+    // Выбор масштаба L по сырой гистограмме.
+    static u32 choose_L(const std::array<u32, M>& f) {
+        u64 N = 0;
         u32 min_f = u32(-1); // minimal non-zero frequency
         for (int i = 0; i < M; ++i) {
-            cs[i + 1] = cs[i] + f[i];
+            N += f[i];
             if (f[i] > 0 && f[i] < min_f) min_f = f[i];
         }
         assert( min_f != u32(-1) );
-        const u64 N = cs[M];
         u32 L = (u32)(N / min_f) + 1; // Min. L when dynamic range correction is not needed: L > floor( N / minimal f)
         L = 1u << int_log(L);
-        L = std::clamp(L, Lmin, Lmax);
+        return std::clamp(L, Lmin, Lmax);
+    }
+
+    Result count(const u8* input, size_t n) {
+        std::array<u32, M> f = histogram(input, n);
+        // Renormalization.
+        std::array<u64, M + 1> cs {0};
+        for (int i = 0; i < M; ++i) {
+            cs[i + 1] = cs[i] + f[i];
+        }
+        const u64 N = cs[M];
+        u32 L = choose_L(f);
         int exceed = 0;
         for (int i = 0; i < M; ++i) {
             const bool is_non_zero = f[i] > 0;
             cs[i + 1] *= L;
             cs[i + 1] /= N;
-            f[i] = cs[i + 1] - cs[i];
+            f[i] = static_cast<u32>(cs[i + 1] - cs[i]);
             const bool is_zero = f[i] == 0;
             if (is_non_zero && is_zero) { // dynamic range failure
                 f[i] = 1;

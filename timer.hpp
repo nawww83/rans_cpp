@@ -1,3 +1,5 @@
+#pragma once
+
 #include <chrono>
 
 
@@ -9,7 +11,7 @@ public:
     Timer(): mBegin(std::chrono::steady_clock::now()) {};
     double elapsed_ns() {  
         auto mEnd = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(mEnd - mBegin).count();
+        return static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(mEnd - mBegin).count());
     }
     void reset() {
         mBegin = std::chrono::steady_clock::now();

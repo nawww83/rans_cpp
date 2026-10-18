@@ -33,3 +33,10 @@ main
 *.exe
 *.out
 *.app
+
+# CMake
+build/
+
+# Manually built binaries
+/rans
+/rans_tests

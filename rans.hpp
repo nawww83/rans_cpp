@@ -2,6 +2,7 @@
 
 #include "counter.hpp"
 #include "io_utils.hpp"
+#include "quantizer.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -29,6 +30,7 @@ constexpr u32 Lmax = 65536;   // Doesn't change it!
 constexpr u32 Bflush = 65536; // Doesn't change it!
 
 static void assert_size(u32 in_size) {
+    (void)in_size; // used only by asserts
     // Проверка на 0
     assert(in_size > 0 && "Size must be greater than zero");
     
@@ -51,11 +53,14 @@ struct FreqPair {
 class Rans{
     public:
         explicit Rans() {}
-        void encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32& out_size);
+        void encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32& out_size,
+                    qnt::Mode mode = qnt::Mode::Precise);
         void decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32 out_size);
         u32 required_bytes(u32 in_size) const {
             assert_size(in_size);
-            return in_size*2 + sizeof(u32)*3 + sizeof(u8)*2 + cnt::M*(sizeof(u16) + sizeof(u8));
+            // 2 байта (M-1, mode|logL) + 5*u32 (4 состояния + размер) +
+            // максимум 3 байта на символ (режим Precise).
+            return in_size*2 + sizeof(u32)*5 + sizeof(u8)*2 + cnt::M*3;
         }
     private:
         io_u::io_utils io;
@@ -64,48 +69,86 @@ class Rans{
         std::array<DecoderInfo, cnt::M> dec_table;
 };
 
-inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32& out_size) {
+inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32& out_size,
+                         qnt::Mode mode) {
     assert_size(in_size);
-    
-    // 1. Считаем частоты (используем ваш счетчик)
-    auto [raw_fr, L] = mCounter.count(input, in_size);
+
+    // 1. Считаем частоты и приводим их к выбранному режиму квантования.
+    std::array<u32, cnt::M> freq;
+    u32 L;
+    if (mode == qnt::Mode::Precise) {
+        // Точная нормализация (аналог арифметического кодирования).
+        auto res = mCounter.count(input, in_size);
+        freq = res.frequencies;
+        L = res.Lscale;
+    } else {
+        const auto raw = cnt::Counter<Lmax>::histogram(input, in_size);
+        L = cnt::Counter<Lmax>::choose_L(raw);
+        qnt::quantize(raw, L, mode, freq);
+    }
     const int logL = cnt::int_log(L);
 
-    // 2. Группируем и сортируем (символ + его частота)
-    struct FreqPair { u8 sym; u32 f; };
-    std::vector<FreqPair> sorted;
-    sorted.reserve(256);
-    for (int i = 0; i < 256; ++i) {
-        if (raw_fr[i] > 0) sorted.push_back({(u8)i, raw_fr[i]});
+    // 2. Группируем и сортируем (символ + его частота).
+    struct SymFreq { u8 sym; u32 f; };
+    std::array<SymFreq, cnt::M> sorted;
+    u32 Ms = 0;
+    for (int i = 0; i < cnt::M; ++i) {
+        if (freq[i] > 0) sorted[Ms++] = {static_cast<u8>(i), freq[i]};
     }
 
     // Сортировка по убыванию частоты для кэш-локальности декодера
-    std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) {
+    std::sort(sorted.begin(), sorted.begin() + Ms, [](const SymFreq& a, const SymFreq& b) {
         return a.f > b.f;
     });
 
-    const u32 M = sorted.size();
-    
-    // 3. Строим таблицы накопленных частот и маппинг для кодирования
-    std::array<u32, 256> symbol_to_idx;
-    std::array<u32, 256> fr; // Отсортированные частоты
-    std::array<u32, 257> cs;
-    cs[0] = 0;
-    for (u32 i = 0; i < M; ++i) {
+    // 3. Строим таблицы накопленных частот, маппинг и данные для спец-путей.
+    std::array<u32, cnt::M> symbol_to_idx{};
+    std::array<u32, cnt::M> fr{}; // Отсортированные частоты
+    std::array<u32, cnt::M> cs{}; // Накопленные частоты
+    std::array<u8,  cnt::M> sh{}; // Степень двойки в частоте
+    std::array<u32, cnt::M> odd{}; // Нечётная часть частоты
+    std::array<u64, cnt::M> recip{}; // Округлённое вверх 2^32 / odd
+    u32 cumulative = 0;
+    for (u32 i = 0; i < Ms; ++i) {
         fr[i] = sorted[i].f;
-        cs[i+1] = cs[i] + fr[i];
-        symbol_to_idx[sorted[i].sym] = i; // Какой индекс в таблице у байта
+        cs[i] = cumulative;
+        cumulative += fr[i];
+        symbol_to_idx[sorted[i].sym] = i;
+
+        const u32 f = fr[i];
+        int tz = 0;
+        while (((f >> tz) & 1u) == 0) ++tz;
+        sh[i] = static_cast<u8>(tz);
+        odd[i] = f >> tz;
+        recip[i] = ((u64(1) << 32) + odd[i] - 1) / odd[i];
     }
+    assert(cumulative == L);
 
-    // 4. Записываем заголовок
+    // 4. Записываем заголовок.
+    //    Байт режима/масштаба: mode (2 бита) | logL (5 бит).
+    //    Частоты квантованных режимов пишем экспонентами в битовом потоке:
+    //      Precise: sym:8, f-1:16
+    //      Pow2:    sym:8, a:5
+    //      Pow23:   sym:8, a:5, b:4
+    //      Pow235:  sym:8, a:5, b:4, c:3
     u8* out_ptr = output;
-    *(out_ptr++) = static_cast<u8>(M - 1);
-    *(out_ptr++) = static_cast<u8>(logL);
-
-    for (u32 i = 0; i < M; ++i) {
-        *(out_ptr++) = sorted[i].sym;
-        io.copy_to_mem<u16>(static_cast<u16>(fr[i] - 1), out_ptr);
-        out_ptr += sizeof(u16);
+    *(out_ptr++) = static_cast<u8>(Ms - 1);
+    *(out_ptr++) = static_cast<u8>((static_cast<u32>(mode) << 5) | static_cast<u32>(logL));
+    {
+        qnt::BitWriter bw(out_ptr);
+        for (u32 i = 0; i < Ms; ++i) {
+            bw.put(sorted[i].sym, 8);
+            if (mode == qnt::Mode::Precise) {
+                bw.put(fr[i] - 1, 16);
+            } else {
+                u32 a, b, c;
+                qnt::pow_exponents(fr[i], a, b, c);
+                bw.put(a, 5);
+                if (mode != qnt::Mode::Pow2) bw.put(b, 4);
+                if (mode == qnt::Mode::Pow235) bw.put(c, 3);
+            }
+        }
+        out_ptr += bw.bytes();
     }
 
     // Резервируем место под финальные состояния и размер
@@ -116,82 +159,109 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     io.copy_to_mem<u32>(in_size, out_ptr);
     out_ptr += sizeof(u32);
 
-    // 5. Кодирование (Quad-Interleaved rANS)
-    // Инициализируем 4 состояния
-    u32 x = L, y = L, z = L, w = L;
-
     const u32 mask = Bflush - 1;
 
-    size_t i = 0;
-    for (; i + 3 < in_size; i += 4) {
-        u32 idx_x = symbol_to_idx[input[i]];
-        u32 idx_y = symbol_to_idx[input[i+1]];
-        u32 idx_z = symbol_to_idx[input[i+2]];
-        u32 idx_w = symbol_to_idx[input[i+3]];
+    // 5. Кодирование (Quad-Interleaved rANS). PATH выбирает способ деления на частоту:
+    //    0 - обычное деление (Precise), 1 - сдвиг (Pow2), 2 - обратное умножение (Pow23/Pow235).
+    auto run = [&]<int PATH>() {
+        auto divf = [&](u32 v, u32 idx) -> u32 {
+            if constexpr (PATH == 0) {
+                return v / fr[idx];
+            } else if constexpr (PATH == 1) {
+                return v >> sh[idx];
+            } else {
+                const u32 y = v >> sh[idx];
+                u32 q = static_cast<u32>((static_cast<u64>(y) * recip[idx]) >> 32);
+                q -= static_cast<u32>(static_cast<u64>(q) * odd[idx] > static_cast<u64>(y));
+                return q;
+            }
+        };
 
-        // Нормализация для всех четырех (выталкиваем в out_ptr)
-        if (x >= fr[idx_x] * Bflush) { io.copy_to_mem<u16>(x & mask, out_ptr); out_ptr += 2; x >>= 16; }
-        if (y >= fr[idx_y] * Bflush) { io.copy_to_mem<u16>(y & mask, out_ptr); out_ptr += 2; y >>= 16; }
-        if (z >= fr[idx_z] * Bflush) { io.copy_to_mem<u16>(z & mask, out_ptr); out_ptr += 2; z >>= 16; }
-        if (w >= fr[idx_w] * Bflush) { io.copy_to_mem<u16>(w & mask, out_ptr); out_ptr += 2; w >>= 16; }
+        u32 x = L, y = L, z = L, w = L;
 
-        // Непосредственно rANS кодирование
-        x += (x / fr[idx_x]) * (L - fr[idx_x]) + cs[idx_x];
-        y += (y / fr[idx_y]) * (L - fr[idx_y]) + cs[idx_y];
-        z += (z / fr[idx_z]) * (L - fr[idx_z]) + cs[idx_z];
-        w += (w / fr[idx_w]) * (L - fr[idx_w]) + cs[idx_w];
+        u32 i = 0;
+        for (; i + 3 < in_size; i += 4) {
+            const u32 idx_x = symbol_to_idx[input[i]];
+            const u32 idx_y = symbol_to_idx[input[i+1]];
+            const u32 idx_z = symbol_to_idx[input[i+2]];
+            const u32 idx_w = symbol_to_idx[input[i+3]];
+
+            // Нормализация для всех четырех (выталкиваем в out_ptr)
+            if (x >= static_cast<u64>(fr[idx_x]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
+            if (y >= static_cast<u64>(fr[idx_y]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
+            if (z >= static_cast<u64>(fr[idx_z]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
+            if (w >= static_cast<u64>(fr[idx_w]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(w & mask), out_ptr); out_ptr += 2; w >>= 16; }
+
+            // Непосредственно rANS кодирование
+            x += divf(x, idx_x) * (L - fr[idx_x]) + cs[idx_x];
+            y += divf(y, idx_y) * (L - fr[idx_y]) + cs[idx_y];
+            z += divf(z, idx_z) * (L - fr[idx_z]) + cs[idx_z];
+            w += divf(w, idx_w) * (L - fr[idx_w]) + cs[idx_w];
+        }
+
+        if (i < in_size) {
+            const u32 idx_x = symbol_to_idx[input[i]];
+            if (x >= static_cast<u64>(fr[idx_x]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(x & mask), out_ptr); out_ptr += 2; x >>= 16; }
+            x += divf(x, idx_x) * (L - fr[idx_x]) + cs[idx_x];
+            i++;
+        }
+        if (i < in_size) {
+            const u32 idx_y = symbol_to_idx[input[i]];
+            if (y >= static_cast<u64>(fr[idx_y]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(y & mask), out_ptr); out_ptr += 2; y >>= 16; }
+            y += divf(y, idx_y) * (L - fr[idx_y]) + cs[idx_y];
+            i++;
+        }
+        if (i < in_size) {
+            const u32 idx_z = symbol_to_idx[input[i]];
+            if (z >= static_cast<u64>(fr[idx_z]) * Bflush) { io.copy_to_mem<u16>(static_cast<u16>(z & mask), out_ptr); out_ptr += 2; z >>= 16; }
+            z += divf(z, idx_z) * (L - fr[idx_z]) + cs[idx_z];
+            i++;
+        }
+
+        // Сохраняем финальные состояния в заголовок
+        io.copy_to_mem<u32>(x, x_ptr);
+        io.copy_to_mem<u32>(y, y_ptr);
+        io.copy_to_mem<u32>(z, z_ptr);
+        io.copy_to_mem<u32>(w, w_ptr);
+
+        out_size = static_cast<u32>(out_ptr - output);
+    };
+
+    switch (mode) {
+        case qnt::Mode::Precise: run.template operator()<0>(); break;
+        case qnt::Mode::Pow2:    run.template operator()<1>(); break;
+        case qnt::Mode::Pow23:
+        case qnt::Mode::Pow235:  run.template operator()<2>(); break;
     }
-
-    if (i < in_size) {
-        u32 idx_x = symbol_to_idx[input[i]];
-        // Нормализация
-        if (x >= fr[idx_x] * Bflush) { io.copy_to_mem<u16>(x & mask, out_ptr); out_ptr += 2; x >>= 16; }
-        // Непосредственно rANS кодирование
-        x += (x / fr[idx_x]) * (L - fr[idx_x]) + cs[idx_x];
-        i++;
-    }
-    if (i < in_size) {
-        u32 idx_y = symbol_to_idx[input[i]];
-        // Нормализация
-        if (y >= fr[idx_y] * Bflush) { io.copy_to_mem<u16>(y & mask, out_ptr); out_ptr += 2; y >>= 16; }
-        // Непосредственно rANS кодирование
-        y += (y / fr[idx_y]) * (L - fr[idx_y]) + cs[idx_y];
-        i++;
-    }
-    if (i < in_size) {
-        u32 idx_z = symbol_to_idx[input[i]];
-        // Нормализация
-        if (z >= fr[idx_z] * Bflush) { io.copy_to_mem<u16>(z & mask, out_ptr); out_ptr += 2; z >>= 16; }
-        // Непосредственно rANS кодирование
-        z += (z / fr[idx_z]) * (L - fr[idx_z]) + cs[idx_z];
-        i++;
-    }
-
-    // Сохраняем финальные состояния в заголовок
-    io.copy_to_mem<u32>(x, x_ptr);
-    io.copy_to_mem<u32>(y, y_ptr);
-    io.copy_to_mem<u32>(z, z_ptr);
-    io.copy_to_mem<u32>(w, w_ptr);
-
-    out_size = out_ptr - output;
 }
 
 inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32 out_size) {
+    (void)out_size; // used only by asserts
     const u8* in_ptr = input;
-    // header: frequency table in 16-bit format
+    // header: mode | logL, затем упакованная таблица частот
     int M = *(u8*)in_ptr; M += 1;
     in_ptr += sizeof(u8);
-    const int logL = *(u8*)in_ptr;
-    in_ptr += sizeof(u8);
+    const u8 mode_logL = *(in_ptr++);
+    const u32 mode = mode_logL >> 5;   // 0=Precise, 1=Pow2, 2=Pow23, 3=Pow235
+    const int logL = mode_logL & 0x1F;
     const u32 L = (1u << logL);
     assert( M <= cnt::M );
     u32 current_cum = 0;
+    qnt::BitReader br(in_ptr);
     for (int i = 0; i < M; ++i) {
-        u8 sym = *(in_ptr++);
-        u16 f0;
-        io.read_mem<u16>(f0, in_ptr);
-        in_ptr += sizeof(u16);
-        u32 f = static_cast<u32>(f0) + 1;
+        const u8 sym = static_cast<u8>(br.get(8));
+        u32 f;
+        if (mode == 0) {
+            f = br.get(16) + 1;
+        } else {
+            const u32 a = br.get(5);
+            u32 b = 0, c = 0;
+            if (mode >= 2) b = br.get(4);
+            if (mode == 3) c = br.get(3);
+            f = 1u << a;
+            for (u32 t = 0; t < b; ++t) f *= 3;
+            for (u32 t = 0; t < c; ++t) f *= 5;
+        }
 
         // Заполняем таблицу
         dec_table[i] = { (u16)f, (u16)current_cum, sym };
@@ -202,6 +272,7 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         }
         current_cum += f;
     }
+    in_ptr += br.bytes();
     u32 y; u32 x; u32 z; u32 w;
     io.read_mem<u32>(x, in_ptr);
     in_ptr += sizeof(u32);
@@ -216,7 +287,6 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     io.read_mem<u32>(decompressed_size, in_ptr);
     in_ptr += sizeof(u32);
     assert( decompressed_size == out_size );
-    const u8* data_ptr = in_ptr;
     in_ptr = input + in_size;
     u8* out = output + decompressed_size;
     
