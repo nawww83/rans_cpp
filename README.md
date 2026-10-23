@@ -37,7 +37,9 @@ ratio for speed:
 | `Pow235` | `2^a * 3^b * 5^c` | shift + reciprocal multiply | Closest quantized mode to `Precise` |
 
 All modes keep the invariant `sum(freq) == L` and `freq >= 1` for every symbol
-present in the input, where `L` is a power of two.
+present in the input, where `L` is a power of two. In the code the modes are
+`Precise`, `Pow2`, `Pow23` and `Pow235`; the benchmark prints the last two as
+`Pow{2,3}` and `Pow{2,3,5}`, and this document uses both spellings.
 
 ### How the quantized frequencies are built
 
@@ -248,53 +250,142 @@ The test covers:
 ## Performance
 
 Absolute throughput depends on CPU, data distribution and frequency scaling.
-Representative medians from the distribution sweep on a WSL laptop
-(Intel Core i7 8th Gen, GCC 13, input near 4 MB):
+Representative medians from the distribution sweep on Linux (Intel Core
+i7-12700, GCC 11.4, pinned to one core with `taskset -c 3`, inputs 2-8 MB):
 
 | Mode | Redundancy | Enc MB/s | Dec MB/s |
 |------|-----------:|---------:|---------:|
-| `Precise` | ~0.16 % | ~198 | ~305 |
-| `Pow235` | ~0.16 % | ~241 | ~308 |
-| `Pow23` | ~0.20 % | ~244 | ~308 |
-| `Pow2` | ~1.8 % | ~263 | ~317 |
+| `Precise` | ~0.15 % | ~410 | ~499 |
+| `Pow235` | ~0.16 % | ~462 | ~498 |
+| `Pow23` | ~0.20 % | ~461 | ~500 |
+| `Pow2` | ~1.79 % | ~472 | ~512 |
 
 `Pow2` is fastest but least compact. `Precise` and `Pow235` are essentially
-tied on redundancy, but `Pow235` encodes ~22% faster because it replaces
+tied on redundancy, but `Pow235` encodes ~13% faster because it replaces
 hardware division with a shift and an exact magic reciprocal. `Pow23` is
-slightly less compact and about as fast as `Pow235`. Decompression is
-essentially mode-independent, since every mode decodes with the same
-multiplication-based rANS step.
+slightly less compact and about as fast. Decompression is essentially
+mode-independent, since every mode decodes with the same multiplication-based
+rANS step: the four modes land within ~3% of each other.
 
 The encoder precomputes `fr * Bflush`, `L - fr`, and the 48-bit magic
 reciprocal, so the non-power-of-two modes need neither a division nor a
 correction step in the hot loop. The remaining limit is the dependent rANS
-state update and renormalization, not the division alone: across the sweep the
-quantized modes encode 22-33% faster than `Precise`, not 2x.
+state update and renormalization, not the division alone: per `p` the
+water-filling modes encode 6-29% faster than `Precise` (`Pow2` up to 53%), and
+12-15% faster on the sweep medians — not the 2-3x that removing `div` from the
+hot loop suggests on paper. The gain is largest where the alphabet is small and
+the stream is skewed (`p` around 0.001 or 0.9), and smallest around
+`p = 0.03-0.1`.
 
-Two changes account for most of the encode gain in this version. First, byte
-counting uses four independent histograms instead of one: at `p = 0.9` the
-single histogram serializes four read-modify-write operations on the same
-element, while the four-lane version runs them in parallel. This alone improves
-encode by ~27% at `p = 0.9`, ~6% at `p = 0.6`, and a few percent at low `p`.
+The fixed-`p` runs show where `Pow2` breaks. Up to `p = 0.3` it stays within
+0.7 percentage points of `Precise` (`p = 0.3`: CR 2.702 against 2.720), but at
+`p = 0.9` one symbol dominates and integer code lengths cannot express a
+frequency ratio of thousands to one: CR 7.200 against 15.326, i.e. 1.111
+bits/symbol where the entropy is 0.521. `Pow23` and `Pow235` track `Precise`
+across the whole range (CR 15.323 at `p = 0.9`). At the other extreme, near
+`p = 0.0001` all modes compress the same (CR 1.000), but encode at 635
+(`Precise`), 775 (`Pow23`), 771 (`Pow235`) and 895 (`Pow2`) MB/s.
+
+Two changes account for most of the encode gain in this version. Measured by
+rebuilding the previous revision and running both builds back to back on the
+same core with the same inputs (2 MiB), they are worth 1.04-1.12x at
+`p <= 0.1`, 1.11-1.18x at `p = 0.3`, 1.30-1.39x at `p = 0.6` and 1.58-1.78x
+at `p = 0.9`.
+
+First, byte counting uses four independent histograms instead of one: at
+`p = 0.9` a single histogram serializes four read-modify-write operations on
+the same element, while the four-lane version runs them in parallel. The
+counting pass itself becomes 3.3x faster at `p = 0.6` and 3.8x at `p = 0.9`,
+which alone is +25-30% encode at `p = 0.6` and +54-62% at `p = 0.9`, +8-10% at
+`p = 0.3`, and +1-4% at low `p`.
 Second, the encoder tables are indexed directly by symbol, so the hot loop no
-longer loads `symbol_to_idx[symbol]` and the per-block frequency sort is gone
-(another ~8% across the sweep). The header is now written in symbol order;
-compressed size differs from the sorted order only by a few bytes per block.
+longer loads `symbol_to_idx[symbol]` and the per-block frequency sort is gone:
+another +2-10% across the sweep (median ~+8%). The header is now written in
+symbol order; compressed size differs from the sorted order only by a few
+bytes per block.
 
 Decoding is unchanged and remains latency-bound. The 64 KiB `mLut` does not fit
 in L1, but it is L2-resident and four independent streams hide most of that
-latency: forcing `L` down to 32 KiB or 16 KiB removed most L1 misses but made
-decode only ~2% faster, so it is not worth the compression loss. Compiling with
-`-DRANS_NATIVE=ON` (`-march=native`) improves decode by roughly 8-10% on this
-CPU and encode slightly at high skew.
+latency: clamping `Lmax` to 32 KiB or 16 KiB makes the table L1-resident and
+speeds decode up by 3-9% on 2 MiB blocks (439 -> 461 and 678 -> 738 MB/s at
+`p = 0.1` and `p = 0.9`), so the cache limit is real, but shrinking `L` is the
+wrong trade in general: `choose_L()` deliberately picks `L > N / min_count` so
+that no observed symbol is rounded to zero, and a clamp would force the
+dynamic-range fixup on short blocks with a wide alphabet.
 
-Fixed per-block costs matter for small buffers. At 64 KiB and `p = 0.1`, the
-histogram is ~24 µs, the `Pow23` quantizer is ~42 µs (`Pow2` ~15 µs,
-`Pow235` ~26 µs, `Precise` ~2 µs), and encode takes ~260 µs. At 4 MiB the
-quantizer and table-fill costs fall below 1% of encode time, while the
-histogram still accounts for roughly 7-15% (it is already included in the
-throughput table). The decoder also fills up to 64 KiB of `mLut` per block
-(~1-2 µs), which is negligible for large blocks but visible for tiny ones.
+Compiling with `-DRANS_NATIVE=ON` (`-march=native`) does not pay off on this
+CPU: best-of-25 decode came out at 424-430 MB/s against 432-447 MB/s for the
+generic build, while encode moved by at most ~4% either way. The hot loops are
+scalar integer code — a byte LUT lookup plus dependent multiply and shift
+chains — so there is little for AVX2 to vectorize. The option is kept for
+machines where the compiler does find something.
+
+Fixed per-block costs matter for small buffers. At 64 KiB and `p = 0.1` the
+histogram takes 15 µs, the quantizer 13 µs (`Pow2`), 34 µs (`Pow23`) or 21 µs
+(`Pow235`), the `Precise` path counts and normalizes in 16 µs, encode takes
+138-172 µs and decode ~125 µs. On such blocks the `Pow23` quantizer alone is
+20% of encode time, and `Pow23`/`Pow235` end up *slower* to encode than
+`Precise` (172 and 160 µs against ~150): water-filling costs 21-34 µs on top of
+the histogram, while the `Precise` normalization adds only about a microsecond
+to the same count. At 2 MiB the same quantizers take 18-46 µs against ~5 ms of
+encode (under 1%), while the histogram is ~490 µs (~9%, and it is already
+included in the throughput table). The decoder also fills up to 64 KiB of
+`mLut` per block (~1-2 µs), which is negligible for large blocks but visible
+for tiny ones.
+
+## Choosing a mode
+
+The mode is stored in the stream, so a block can be encoded with whichever mode
+fits it and the decoder does not need to be told. Redundancy figures below are
+the sweep medians from the table above (the definition is in the Redundancy
+section); the per-symbol costs come from separate runs at `N` = 64 KiB.
+
+| Situation | Mode | Why |
+|-----------|------|-----|
+| Default, unknown data | `Pow235` | `Precise`-level ratio, ~+13% encode, 20 header bits/symbol |
+| Very small blocks, ratio is all that matters | `Pow23` | 3 header bits/symbol less than `Pow235` |
+| Near-uniform data, or encode speed is everything | `Pow2` | Fastest encoder, 13 header bits/symbol |
+| Large blocks, ratio is all that matters | `Precise` | Best ratio when `L` is large |
+
+In more detail:
+
+- **`Pow235` is the sensible default.** Its median redundancy (0.16%) is within
+  a hundredth of a percentage point of `Precise` (0.15%), and it encodes about
+  13% faster on the sweep and 21-29% faster at the extremes. Its quantizer is
+  also the cheapest of the two water-filling modes (21 µs against 34 µs at
+  64 KiB), and its header is 20 bits per symbol.
+- **`Pow23` buys exactly one thing: a shorter header.** Three bits per symbol
+  less means 96 bytes per block at a full 256-symbol alphabet. Everything else
+  is slightly worse — redundancy 0.20% against 0.16%, and the most expensive
+  quantizer — so it only wins when the header dominates, i.e. on very small
+  blocks, and only if encode time does not matter there. Otherwise prefer
+  `Pow235`.
+- **`Pow2` is not a general-purpose choice.** It is a Huffman code: its
+  frequencies are integer powers of two, so it cannot express a dominant
+  symbol. Up to `p = 0.3` (entropy above ~2.9 bits/byte) it stays within 0.7
+  percentage points of `Precise` and encodes 10-53% faster; at `p = 0.9` it
+  compresses to CR 7.2 instead of 15.3. Use it for data that is close to
+  uniform (already-compressed or encrypted-looking input, byte planes of
+  numeric arrays) or when the encoder is the bottleneck and the ratio is not.
+- **`Precise` is not automatically the best ratio.** When `L` is small — short
+  blocks, or a wide alphabet with very rare symbols — its cumulative rounding is
+  worse than water-filling. At `N` = 64 KiB, `p = 0.003` the codec picks
+  `L` = 512, and there `Precise` costs +0.042 bit/symbol against +0.020 for
+  `Pow23`; given `L` = 4096 on the same data the two swap places (+0.0005
+  against +0.005). For large blocks with a large `L` it is the most accurate
+  mode and wins.
+- **Decoding does not constrain the choice**: all four modes decode within ~3%
+  of each other, because the decoder only sees the frequencies, not the mode.
+
+Rules of thumb:
+
+- Start with `Pow235`; there is rarely a reason to switch to `Precise` unless
+  the blocks are large and every 0.01% of ratio counts.
+- If a single byte value takes more than about half of the block, do not use
+  `Pow2`: that is exactly the case where a power-of-two frequency grid fails.
+- Below ~64 KiB the water-filling (21-34 µs) is a visible share of encode time
+  and `Precise`'s rounding starts to hurt, so `Pow235` is the best compromise;
+  `Pow23` only if the block is so small that 96 header bytes really matter.
 
 ## Notes
 
