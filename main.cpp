@@ -26,6 +26,9 @@ double calculate_entropy(const std::array<cnt::u32, cnt::M>& f, size_t L) {
 }
 
 static std::random_device rd{};
+// Отдельный ГПСЧ для размера блока и флага инверсии: std::rand() имеет
+// маленький период и общий глобальный state.
+static std::mt19937_64 rng64{rd()};
 
 template <typename T>
 class GeometricDistribution {
@@ -108,11 +111,11 @@ int main() {
     double perf_iters = 0;
 
     for (;;) {
-        size_t N = (((size_t)std::rand()) % N_max) + 1;
+        size_t N = (((size_t)rng64()) % N_max) + 1;
         const bool measure_perf = (N >= N_performance_is_measured);
         std::cout << std::endl;
         std::cout << "New iteration: required output size: " << rans.required_bytes(static_cast<rans::u32>(N)) << ", N: " << N << std::endl;
-        const bool inv_f = std::rand() % 2;
+        const bool inv_f = (rng64() & 1) != 0;
         std::cout << " Test is started, inversion flag: " << inv_f << ", please, wait..." << std::endl;
 
         std::array<ModeStats, kModes.size()> stats;

@@ -49,6 +49,8 @@ public:
     std::vector<u32> v;
     // Прямая таблица value -> индекс в v (или -1). Ускоряет поиск в горячем цикле.
     std::vector<int16_t> lut;
+    // log2(v[i]): считается один раз, чтобы не вызывать log2 в горячих циклах.
+    std::vector<double> slog;
 
     void build(std::initializer_list<u32> primes, u32 limit) {
         std::set<u32> s{1};
@@ -66,6 +68,8 @@ public:
         v.assign(s.begin(), s.end());
         lut.assign(limit + 1, int16_t(-1));
         for (size_t i = 0; i < v.size(); ++i) lut[v[i]] = static_cast<int16_t>(i);
+        slog.resize(v.size());
+        for (size_t i = 0; i < v.size(); ++i) slog[i] = std::log2(static_cast<double>(v[i]));
     }
 
     // Индекс наибольшего значения <= x (x >= 1). -1, если такого нет.
@@ -265,11 +269,8 @@ inline void smooth_refine(std::array<u32, M>& f,
     const int n = static_cast<int>(syms.size());
     if (n < 2) return;
 
-    // Предвычисленные логарифмы значений множества.
-    std::vector<double> slog(ss.v.size());
-    for (size_t i = 0; i < ss.v.size(); ++i) {
-        slog[i] = std::log2(static_cast<double>(ss.v[i]));
-    }
+    // Предвычисленные логарифмы значений множества (см. SmoothSet::slog).
+    const std::vector<double>& slog = ss.slog;
 
     std::vector<int> sidx(n);
     std::vector<u32> cur(n), cnt(n);
@@ -420,23 +421,26 @@ inline bool waterfill_freqs(const std::array<u32, M>& raw, u32 L,
     // Проход 2: добираем/снимаем остаток по маргинальной выгоде.
     long long need = (long long)L - sum;
     const int S = static_cast<int>(ss.v.size());
+    // Текущий индекс в ss.v для каждого символа: избавляет от index_of()
+    // (поиск в 128-КБ LUT) на каждом шаге перебора.
+    std::array<int, M> cur_idx{};
+    for (int k = 0; k < n; ++k) cur_idx[k] = ss.index_of(f[idx[k]]);
     while (need != 0) {
         const bool up = need > 0;
         int best = -1;
         double best_prio = up ? -1e300 : 1e300;
         long long best_d = 0;
         for (int k = 0; k < n; ++k) {
-            const int i = idx[k];
-            const int j = ss.index_of(f[i]);
+            const int j = cur_idx[k];
             if (j < 0) continue;
             const int jj = up ? j + 1 : j - 1;
             if (jj < 0 || jj >= S) continue;
             const u32 nv = ss.v[jj];
-            const long long d = up ? (long long)nv - (long long)f[i]
-                                   : (long long)f[i] - (long long)nv;
+            const long long d = up ? (long long)nv - (long long)f[idx[k]]
+                                   : (long long)f[idx[k]] - (long long)nv;
             if (d <= 0 || d > (up ? need : -need)) continue;
             const double gain =
-                raw[i] * std::abs(std::log2(double(nv) / double(f[i])));
+                raw[idx[k]] * std::abs(ss.slog[jj] - ss.slog[j]);
             const double prio = gain / double(d);
             if (up ? (prio > best_prio) : (prio < best_prio)) {
                 best_prio = prio;
@@ -445,18 +449,15 @@ inline bool waterfill_freqs(const std::array<u32, M>& raw, u32 L,
             }
         }
         if (best < 0) break;
-        const int i = idx[best];
-        const int j = ss.index_of(f[i]);
-        f[i] = ss.v[up ? j + 1 : j - 1];
+        cur_idx[best] += up ? 1 : -1;
+        f[idx[best]] = ss.v[cur_idx[best]];
         need += up ? -best_d : best_d;
     }
 
     if (need == 0) return true;
 
     // Остаток (на практике 0..1) правим одной парной заменой.
-    std::vector<double> slog(ss.v.size());
-    for (size_t i = 0; i < ss.v.size(); ++i) slog[i] = std::log2(double(ss.v[i]));
-    return pair_change_sum(f, raw, ss, slog, need);
+    return pair_change_sum(f, raw, ss, ss.slog, need);
 }
 
 // ---------------------------------------------------------------------------

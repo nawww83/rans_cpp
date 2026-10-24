@@ -40,8 +40,9 @@ static void assert_size(u32 in_size) {
 }
 
 struct DecoderInfo {
-    u16 f;        // Частота
-    u16 cum_f;    // Накопленная частота
+    // u32, а не u16: частота может быть равна L == 65536 и не влезает в u16.
+    u32 f;        // Частота
+    u32 cum_f;    // Накопленная частота
     u8 symbol;    // Символ-байт
 };
 
@@ -71,6 +72,9 @@ class Rans{
 
 inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32& out_size,
                          qnt::Mode mode) {
+    // В Release assert_size() выключен: пустой вход иначе дал бы Ms == 0
+    // и переполнение при записи Ms - 1. out_size == 0 — сигнал ошибки.
+    if (in_size == 0) [[unlikely]] { out_size = 0; return; }
     assert_size(in_size);
 
     // 1. Считаем частоты и приводим их к выбранному режиму квантования.
@@ -118,6 +122,8 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         lmf[sym] = L - f;
     }
     assert(cumulative == L);
+    // В Release проверяем явно: некорректные частоты дали бы битый поток.
+    if (cumulative != L) [[unlikely]] { out_size = 0; return; }
 
     // 4. Записываем заголовок.
     //    Байт режима/масштаба: mode (2 бита) | logL (5 бит).
@@ -158,12 +164,10 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     const u32 mask = Bflush - 1;
 
     // 5. Кодирование (Quad-Interleaved rANS). PATH выбирает способ деления на частоту:
-    //    0 - обычное деление (Precise), 1 - сдвиг (Pow2), 2 - обратное умножение (Pow23/Pow235).
+    //    0 - сдвиг (Pow2), 1 - обратное умножение (Precise/Pow23/Pow235).
     auto run = [&]<int PATH>() {
         auto divf = [&](u32 v, u32 idx) -> u32 {
             if constexpr (PATH == 0) {
-                return v / fr[idx];
-            } else if constexpr (PATH == 1) {
                 return v >> sh[idx];
             } else {
                 const u32 y = v >> sh[idx];
@@ -225,15 +229,22 @@ inline void Rans::encode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     };
 
     switch (mode) {
-        case qnt::Mode::Precise: run.template operator()<0>(); break;
-        case qnt::Mode::Pow2:    run.template operator()<1>(); break;
+        case qnt::Mode::Pow2:    run.template operator()<0>(); break;
+        case qnt::Mode::Precise:
         case qnt::Mode::Pow23:
-        case qnt::Mode::Pow235:  run.template operator()<2>(); break;
+        case qnt::Mode::Pow235:  run.template operator()<1>(); break;
+        default:
+            assert(false && "unknown quantization mode");
+            // В Release не оставляем out_size неинициализированным:
+            // путь с реципроком точен для любой частоты.
+            run.template operator()<1>();
+            break;
     }
 }
 
 inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT output, u32 out_size) {
     (void)out_size; // used only by asserts
+    if (in_size < 2) [[unlikely]] return; // заголовок не помещается
     const u8* in_ptr = input;
     // header: mode | logL, затем упакованная таблица частот
     int M = *(u8*)in_ptr; M += 1;
@@ -241,8 +252,11 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     const u8 mode_logL = *(in_ptr++);
     const u32 mode = mode_logL >> 5;   // 0=Precise, 1=Pow2, 2=Pow23, 3=Pow235
     const int logL = mode_logL & 0x1F;
-    const u32 L = (1u << logL);
     assert( M <= cnt::M );
+    // В Release проверяем заголовок явно: logL <= 16 (Lmax), M <= 256.
+    // Иначе mLut/dec_table вышли бы за границы.
+    if (M > cnt::M || logL > 16) [[unlikely]] return;
+    const u32 L = (1u << logL);
     u32 current_cum = 0;
     qnt::BitReader br(in_ptr);
     for (int i = 0; i < M; ++i) {
@@ -261,7 +275,8 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         }
 
         // Заполняем таблицу
-        dec_table[i] = { (u16)f, (u16)current_cum, sym };
+        if (current_cum + f > L) [[unlikely]] return; // битые частоты
+        dec_table[i] = { f, current_cum, sym };
 
         // LUT теперь указывает на индекс i (0, 1, 2...)
         for (u32 j = current_cum; j < current_cum + f; ++j) {
@@ -284,6 +299,7 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
     io.read_mem<u32>(decompressed_size, in_ptr);
     in_ptr += sizeof(u32);
     assert( decompressed_size == out_size );
+    if (decompressed_size != out_size) [[unlikely]] return;
     in_ptr = input + in_size;
     u8* out = output + decompressed_size;
     
@@ -331,7 +347,9 @@ inline void Rans::decode(const u8* RESTRICT input, u32 in_size, u8* RESTRICT out
         const auto& inf_z = dec_table[iz];
         const auto& inf_w = dec_table[iw];
 
-        // 3. Запись 4 байт (LIFO порядок!)
+        // 3. Запись 4 байт (LIFO порядок!). Четыре byte-store дешевле
+        //    ручной сборки u32: компилятор и так держит символы в байтах,
+        //    а shifts+or добавляют ~5 инструкций на итерацию.
         out -= 4;
         out[3] = inf_w.symbol;
         out[2] = inf_z.symbol;

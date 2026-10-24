@@ -14,30 +14,36 @@ using namespace qnt;
 static std::mt19937 rng(12345);
 
 static void test_reciprocal() {
-    for (const auto* ss : {&smooth23(), &smooth235()}) {
-        for (u32 odd : ss->v) {
-            if (odd == 0) continue;
-            const u64 recip = ((u64(1) << 32) + odd - 1) / odd;
-            // Проверяем на граничных значениях и случайных x.
-            std::vector<u32> xs;
-            for (u32 k = 1; k < 300; ++k) {
-                u64 base = (u64)odd * k;
-                for (long long d = -3; d <= 3; ++d) {
-                    long long v = (long long)base + d;
-                    if (v >= 1 && v < (1ll << 32)) xs.push_back((u32)v);
-                }
+    // Проверяем ровно ту формулу, что в энкодере: floor(y / odd) ==
+    // (y * ceil(2^48 / odd)) >> 48 для всех y < odd * Bflush.
+    // После ренормализации x < f * Bflush, поэтому y = x >> tz < odd * Bflush.
+    // Перебираем все нечётные odd < 2^16 — это покрывает любую частоту f.
+    for (u32 odd = 1; odd < 65536; odd += 2) {
+        const u64 recip = ((u64(1) << 48) + odd - 1) / odd;
+        const u64 limit = (u64)odd * 65536; // y < limit
+        auto check = [&](u32 y) {
+            const u32 q = (u32)(((u64)y * recip) >> 48);
+            if (q != y / odd) {
+                std::printf("RECIP FAIL odd=%u y=%u got=%u want=%u\n", odd, y, q, y / odd);
+                assert(false);
             }
-            for (int t = 0; t < 2000; ++t) xs.push_back(rng());
-            xs.push_back(0xFFFFFFFFu);
-            for (u32 y : xs) {
-                u32 q = (u32)(((u64)y * recip) >> 32);
-                q -= (u32)((u64)q * odd > (u64)y);
-                if (q != y / odd) {
-                    std::printf("RECIP FAIL odd=%u y=%u got=%u want=%u\n", odd, y, q, y / odd);
-                    assert(false);
-                }
+        };
+        // Границы диапазона и окрестности кратних odd.
+        check(0);
+        check((u32)(limit - 1));
+        for (u32 k = 0; k < 8; ++k) {
+            const u32 y = (u32)(limit - 1 - k);
+            check(y);
+            if (y > 0) check(y - 1);
+        }
+        for (u32 k = 0; k < 8; ++k) {
+            const long long base = (long long)odd * k;
+            for (long long d = -2; d <= 2; ++d) {
+                const long long v = base + d;
+                if (v >= 0 && (u64)v < limit) check((u32)v);
             }
         }
+        for (int t = 0; t < 8; ++t) check((u32)(rng() % limit));
     }
     std::printf("reciprocal: OK\n");
 }
